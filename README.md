@@ -168,21 +168,18 @@ Be aware of these before relying on this tool for a sensitive bundle:
   the bundle before running.
 - **SAS log line unwrapping is not implemented.** Wrapped/continuation lines
   may cause a residual miss; the audit pass is the backstop, not a guarantee.
-- **JDBC/ActiveMQ connection strings with embedded credentials and a bare
-  (non-dotted) hostname** can leave that hostname untokenized, e.g.
-  `jdbc:postgresql://user:pass@dbprod01:5432/db` leaves `dbprod01` as plain
-  text (a dotted hostname like `db-prod-01.acme.internal` in the same
-  position is tokenized correctly). The audit pass's bare-word rules are the
-  backstop for this case.
-- **Per-file profile-driven detector tuning is partial.** Profile
-  auto-detection exists, but `extra_internal_tlds` is the only profile
-  override actually wired into detector behavior; `ipv4.skip_ranges` and
-  `allowlist.case_insensitive` from the config file are parsed but not yet
-  applied.
+- **Config-file `detectors.fqdn.extra_internal_tlds` is not yet applied.**
+  Extra FQDN TLDs currently come only from the built-in profiles'
+  `extra_internal_tlds`. (`detectors.ipv4.skip_ranges` and
+  `detectors.allowlist.case_insensitive` *are* applied -- see the config
+  section in [`docs/usage.md`](docs/usage.md).)
 - **No AIX support.** Linux, Windows, and macOS only.
 - **No CI/CD pipeline.** Local builds only for now.
-- **No cross-bundle consistency.** Each run gets a fresh token registry;
-  the same hostname in two different runs gets different tokens.
+- **No cross-bundle consistency, by design.** Each run gets a fresh token
+  registry, so the same hostname in two different runs gets different tokens.
+  This is intentional: the mapping file is per-case and ephemeral (see "The
+  mapping file"), and cross-run/cross-bundle correlation is a deliberate
+  non-goal.
 
 ## Documentation
 

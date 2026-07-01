@@ -26,10 +26,11 @@ var ownArtifactNames = map[string]bool{
 // AuditDirectory re-scans every file in an already-sanitized directory for
 // patterns that look like residual PII, for the --audit-only CLI mode. It
 // applies the same binary-file skipping and encoding detection as a normal
-// sanitize run. ignorelistPath, if set, is loaded the same way as a normal
-// run's --ignorelist, so hostnames the original run deliberately left
-// untouched (e.g. "*.sas.com") aren't re-flagged here as unredacted PII.
-func AuditDirectory(dir string, ignorelistPath string) ([]audit.Finding, error) {
+// sanitize run. ignorelistPath and ipv4SkipRanges, if set, are honored the
+// same way as a normal run's --ignorelist and detectors.ipv4.skip_ranges, so
+// hostnames/addresses the original run deliberately left untouched aren't
+// re-flagged here as unredacted PII.
+func AuditDirectory(dir string, ignorelistPath string, ipv4SkipRanges []string) ([]audit.Finding, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, inputErrorf("audit directory %s: %w", dir, err)
@@ -39,6 +40,10 @@ func AuditDirectory(dir string, ignorelistPath string) ([]audit.Finding, error) 
 	}
 
 	ignoreList, err := loadIgnoreList(ignorelistPath)
+	if err != nil {
+		return nil, err
+	}
+	skipRanges, err := parseSkipRanges(ipv4SkipRanges)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +69,7 @@ func AuditDirectory(dir string, ignorelistPath string) ([]audit.Finding, error) 
 
 	scanner := audit.NewScanner()
 	scanner.Ignore = ignoreList
+	scanner.IPv4SkipRanges = skipRanges
 	var findings []audit.Finding
 	for _, path := range paths {
 		rel, err := filepath.Rel(dir, path)

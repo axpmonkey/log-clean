@@ -9,7 +9,7 @@ import (
 // fullDetectorChain is a thin test wrapper around the real production chain
 // builder (DefaultDetectorChain) with an allowlist included.
 func fullDetectorChain(allowlist []string) []detect.Detector {
-	return DefaultDetectorChain(nil, allowlist)
+	return DefaultDetectorChain(ChainOptions{Allowlist: allowlist})
 }
 
 func TestURLEmbeddedHostSharesTokenWithStandaloneOccurrence(t *testing.T) {

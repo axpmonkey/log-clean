@@ -35,6 +35,11 @@ type flags struct {
 	audit, strict, reverseMode, auditOnly                          bool
 	verbose, quiet, dryRun, noColor                                bool
 	showVersion, showHelp                                          bool
+
+	// Config-file-only detector overrides (no CLI flag): populated by
+	// applyConfigFile from the config's detectors section.
+	ipv4SkipRanges           []string
+	allowlistCaseInsensitive bool
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -119,6 +124,9 @@ func applyConfigFile(f *flags, fs *flag.FlagSet, stderr io.Writer) int {
 	if cfg.Ignorelist != "" && !explicit["ignorelist"] {
 		f.ignorelist = cfg.Ignorelist
 	}
+	// These have no CLI flag, so they come straight from the config file.
+	f.ipv4SkipRanges = cfg.Detectors.IPv4.SkipRanges
+	f.allowlistCaseInsensitive = cfg.Detectors.Allowlist.CaseInsensitive
 	if len(cfg.Profiles) > 0 && !explicit["profiles"] {
 		f.profiles = strings.Join(cfg.Profiles, ",")
 	}
@@ -141,17 +149,19 @@ func runSanitize(f *flags, positional []string, stdout, stderr io.Writer) int {
 	}
 
 	opts := sanitize.Options{
-		InputDir:       input,
-		OutputDir:      f.output,
-		MappingPath:    f.mapping,
-		HostlistPath:   f.hostlist,
-		IgnorelistPath: f.ignorelist,
-		Profiles:       splitProfiles(f.profiles),
-		AuditEnabled:   f.audit,
-		Strict:         f.strict,
-		DryRun:         f.dryRun,
-		Verbose:        f.verbose,
-		ToolVersion:    version,
+		InputDir:                 input,
+		OutputDir:                f.output,
+		MappingPath:              f.mapping,
+		HostlistPath:             f.hostlist,
+		IgnorelistPath:           f.ignorelist,
+		IPv4SkipRanges:           f.ipv4SkipRanges,
+		AllowlistCaseInsensitive: f.allowlistCaseInsensitive,
+		Profiles:                 splitProfiles(f.profiles),
+		AuditEnabled:             f.audit,
+		Strict:                   f.strict,
+		DryRun:                   f.dryRun,
+		Verbose:                  f.verbose,
+		ToolVersion:              version,
 	}
 
 	result, err := sanitize.Sanitize(opts)
@@ -215,7 +225,7 @@ func runAuditOnly(f *flags, positional []string, stdout, stderr io.Writer) int {
 		return exitConfigError
 	}
 
-	findings, err := sanitize.AuditDirectory(dir, f.ignorelist)
+	findings, err := sanitize.AuditDirectory(dir, f.ignorelist, f.ipv4SkipRanges)
 	if err != nil {
 		return reportError(err, stderr)
 	}

@@ -5,6 +5,7 @@
 package audit
 
 import (
+	"net/netip"
 	"regexp"
 
 	"sas-log-sanitize/internal/detect"
@@ -83,6 +84,12 @@ type Scanner struct {
 	// untouched (e.g. "*.sas.com") rather than missing it. Left as the zero
 	// value (Empty()) when no --ignorelist is configured.
 	Ignore detect.IgnoreList
+
+	// IPv4SkipRanges mirrors detectors.ipv4.skip_ranges: addresses in these
+	// CIDR blocks were deliberately left untokenized by the IPv4 detector, so
+	// the unredacted-ipv4 rule must not flag them as residual PII. Nil when no
+	// skip ranges are configured.
+	IPv4SkipRanges []netip.Prefix
 }
 
 // NewScanner returns a Scanner configured with every rule from the plan's
@@ -98,7 +105,8 @@ func NewScanner() *Scanner {
 		{name: "unredacted-ipv4", severity: SeverityHigh,
 			pattern: regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`),
 			suppress: func(line string, start, end int) bool {
-				return detect.LooksLikeVersionString(line, start)
+				return detect.LooksLikeVersionString(line, start) ||
+					detect.IPInSkipRanges(line[start:end], s.IPv4SkipRanges)
 			}},
 
 		// Reuses detect.IsValidFQDN's TLD allowlist, the same way the real

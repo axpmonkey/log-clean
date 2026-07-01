@@ -7,6 +7,8 @@
 package pipeline
 
 import (
+	"net/netip"
+
 	"sas-log-sanitize/internal/detect"
 	"sas-log-sanitize/internal/tokenize"
 )
@@ -30,6 +32,13 @@ type Pipeline struct {
 	// than tokenized. Left as the zero value (Empty()) when no --ignorelist
 	// is configured, so the check is a no-op on the common path.
 	Ignore detect.IgnoreList
+
+	// IPv4SkipRanges mirrors detectors.ipv4.skip_ranges: CIDR blocks the IPv4
+	// detector leaves untokenized. Held here (in addition to being baked into
+	// the IPv4 detector) so Run can hand the same ranges to the audit scanner,
+	// keeping its unredacted-ipv4 rule from flagging the intentionally-skipped
+	// addresses. Nil when no skip ranges are configured.
+	IPv4SkipRanges []netip.Prefix
 
 	// replacementCounts tracks actual substitution occurrences per category
 	// (plus the synthetic "SECRET" key for redactions) across every

@@ -3,6 +3,7 @@ package sanitize
 import (
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -71,14 +72,25 @@ func Sanitize(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	skipRanges, err := parseSkipRanges(opts.IPv4SkipRanges)
+	if err != nil {
+		return Result{}, err
+	}
+
 	extraTLDs, err := resolveExtraTLDs(opts.Profiles, log)
 	if err != nil {
 		return Result{}, err
 	}
 
-	chain := pipeline.DefaultDetectorChain(extraTLDs, allowlist)
+	chain := pipeline.DefaultDetectorChain(pipeline.ChainOptions{
+		ExtraTLDs:                extraTLDs,
+		Allowlist:                allowlist,
+		AllowlistCaseInsensitive: opts.AllowlistCaseInsensitive,
+		IPv4SkipRanges:           skipRanges,
+	})
 	p := pipeline.New(chain)
 	p.Ignore = ignoreList
+	p.IPv4SkipRanges = skipRanges
 
 	runResult, err := pipeline.Run(p, pipeline.RunOptions{
 		InputDir:     opts.InputDir,
@@ -159,6 +171,25 @@ func loadIgnoreList(ignorelistPath string) (detect.IgnoreList, error) {
 		return detect.IgnoreList{}, configErrorf("parsing ignorelist %s: %w", ignorelistPath, err)
 	}
 	return list, nil
+}
+
+// parseSkipRanges converts CIDR strings (detectors.ipv4.skip_ranges) into
+// parsed prefixes, returning a config-kind error on the first malformed one
+// so a typo in the config surfaces immediately rather than silently skipping
+// nothing.
+func parseSkipRanges(cidrs []string) ([]netip.Prefix, error) {
+	if len(cidrs) == 0 {
+		return nil, nil
+	}
+	prefixes := make([]netip.Prefix, 0, len(cidrs))
+	for _, c := range cidrs {
+		p, err := netip.ParsePrefix(c)
+		if err != nil {
+			return nil, configErrorf("invalid ipv4 skip_range %q: %w", c, err)
+		}
+		prefixes = append(prefixes, p)
+	}
+	return prefixes, nil
 }
 
 // resolveExtraTLDs unions extra_internal_tlds across every requested

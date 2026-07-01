@@ -77,37 +77,54 @@ type AllowlistDetector struct {
 	// span (via the pipeline's first-come overlap rule) before a shorter
 	// hostname that happens to be a substring of them is tried.
 	hosts []string
+	// caseInsensitive, when set (from detectors.allowlist.case_insensitive),
+	// matches entries regardless of case. The tokenized Value is still the
+	// exact text from the log line, not the allowlist entry, so a round-trip
+	// through reverse mode restores the original casing.
+	caseInsensitive bool
 }
 
 // NewAllowlistDetector builds a detector from already-loaded entries
 // (typically the output of LoadAllowlist). It re-sorts defensively in case
-// the caller passes an unsorted list.
-func NewAllowlistDetector(entries []string) AllowlistDetector {
+// the caller passes an unsorted list. When caseInsensitive is true, matching
+// ignores case.
+func NewAllowlistDetector(entries []string, caseInsensitive bool) AllowlistDetector {
 	sorted := make([]string, len(entries))
 	copy(sorted, entries)
 	sort.Slice(sorted, func(i, j int) bool { return len(sorted[i]) > len(sorted[j]) })
-	return AllowlistDetector{hosts: sorted}
+	return AllowlistDetector{hosts: sorted, caseInsensitive: caseInsensitive}
 }
 
 func (AllowlistDetector) Name() string { return "allowlist" }
 
 func (d AllowlistDetector) Detect(line string) []Match {
+	// For case-insensitive matching, search within a lowercased copy of the
+	// line. Hostnames are ASCII, so lowercasing preserves byte length and
+	// offsets -- the span found in `hay` maps directly back onto `line`.
+	hay := line
+	if d.caseInsensitive {
+		hay = strings.ToLower(line)
+	}
 	var matches []Match
 	for _, host := range d.hosts {
 		if host == "" {
 			continue
 		}
+		needle := host
+		if d.caseInsensitive {
+			needle = strings.ToLower(host)
+		}
 		start := 0
 		for {
-			idx := strings.Index(line[start:], host)
+			idx := strings.Index(hay[start:], needle)
 			if idx < 0 {
 				break
 			}
 			s := start + idx
-			e := s + len(host)
+			e := s + len(needle)
 			matches = append(matches, Match{
 				Span:     Span{Start: s, End: e},
-				Value:    host,
+				Value:    line[s:e],
 				Category: "HOST",
 			})
 			start = e

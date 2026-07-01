@@ -93,13 +93,25 @@ verbose: true
 detectors:
   fqdn:
     extra_internal_tlds: [acmecorp, customerdomain]
+  ipv4:
+    skip_ranges: [10.0.0.0/8, 192.168.0.0/16]
+  allowlist:
+    case_insensitive: true
 ```
 
 Flags passed explicitly on the command line always win over the config
-file's values. Note: `detectors.ipv4.skip_ranges` and
-`detectors.allowlist.case_insensitive` are parsed (so a config file
-containing them won't error) but are not yet applied to detector behavior --
-only `detectors.fqdn.extra_internal_tlds` is wired through.
+file's values. Detector overrides:
+
+- `detectors.ipv4.skip_ranges` — CIDR blocks whose IPv4 addresses are left
+  untokenized (e.g. non-sensitive internal ranges). A malformed CIDR is a
+  config error. The audit pass honors these too, so skipped addresses aren't
+  flagged as residual PII (in `--audit-only`, pass the same `--config`).
+- `detectors.allowlist.case_insensitive` — match `--hostlist` entries
+  regardless of case. The token still records the exact text from the log,
+  so reverse mode restores original casing.
+- `detectors.fqdn.extra_internal_tlds` — parsed but not yet consumed from the
+  config file; extra FQDN TLDs currently come only from the built-in
+  profiles' `extra_internal_tlds`.
 
 ## Dry run
 
