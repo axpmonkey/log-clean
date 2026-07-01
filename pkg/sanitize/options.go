@@ -14,6 +14,12 @@ type Options struct {
 	// HostlistPath, if set, points to a customer hostname allowlist file
 	// (see detect.LoadAllowlist for format).
 	HostlistPath string
+	// IgnorelistPath, if set, points to a file of hostnames/domains that
+	// should never be tokenized or redacted, even if a detector would
+	// otherwise match them (e.g. "*.sas.com" for a noisy but non-sensitive
+	// vendor domain). See detect.LoadIgnoreList for format. This is the
+	// inverse of HostlistPath, which forces tokenization.
+	IgnorelistPath string
 	// Profiles selects which built-in profiles' extra_internal_tlds get
 	// merged into the FQDN detector. ["auto"] (the default) merges every
 	// built-in profile's extras for the whole run -- per-file profile

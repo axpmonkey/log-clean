@@ -9,13 +9,14 @@ import "gopkg.in/yaml.v3"
 // ipv4.skip_ranges and allowlist.case_insensitive are accepted and ignored.
 // See pkg/sanitize/doc.go's scope note.
 type Config struct {
-	Output    string   `yaml:"output"`
-	Hostlist  string   `yaml:"hostlist"`
-	Profiles  []string `yaml:"profiles"`
-	Audit     *bool    `yaml:"audit"`
-	Strict    bool     `yaml:"strict"`
-	Verbose   bool     `yaml:"verbose"`
-	Detectors struct {
+	Output     string   `yaml:"output"`
+	Hostlist   string   `yaml:"hostlist"`
+	Ignorelist string   `yaml:"ignorelist"`
+	Profiles   []string `yaml:"profiles"`
+	Audit      *bool    `yaml:"audit"`
+	Strict     bool     `yaml:"strict"`
+	Verbose    bool     `yaml:"verbose"`
+	Detectors  struct {
 		FQDN struct {
 			ExtraInternalTLDs []string `yaml:"extra_internal_tlds"`
 		} `yaml:"fqdn"`

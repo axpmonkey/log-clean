@@ -26,6 +26,32 @@ After both passes: the mapping file (`_mapping.json`), audit report
 (`_summary.txt`), and a runlog (`_runlog.txt`) are written to the output
 directory.
 
+## Ignoring hostnames/domains
+
+```sh
+sas-log-sanitize -i /path/to/log-bundle -o /path/to/output --ignorelist ./ignored-hosts.txt
+```
+
+`--ignorelist` points to a file of hostnames/domains that should never be
+tokenized or redacted, even if a detector would otherwise match them --
+useful for a noisy but non-sensitive vendor domain that shows up constantly
+in license-check or support-portal URLs. One entry per non-empty,
+non-comment (`#`) line:
+
+```
+# exact hostname
+license.example.com
+
+# wildcard: matches sas.com itself and any subdomain (db1.sas.com, etc.)
+*.sas.com
+```
+
+This is the inverse of `--hostlist`/`hostlist`, which *forces* a customer
+hostname to always be tokenized, including inside compound strings.
+`--ignorelist` is also honored by `--audit-only`, so re-auditing
+already-sanitized output doesn't flag the intentionally-untouched
+hostnames as residual PII.
+
 ## Reverse mode
 
 ```sh
@@ -41,7 +67,7 @@ run) and `SECRET_REDACTED` are left unchanged.
 ## Audit-only mode
 
 ```sh
-sas-log-sanitize --audit-only <sanitized-dir>
+sas-log-sanitize --audit-only <sanitized-dir> [--ignorelist ./ignored-hosts.txt]
 ```
 
 Re-scans every file in `<sanitized-dir>` (skipping the tool's own
@@ -57,6 +83,7 @@ sanitized files.
 ```yaml
 output: ./sanitized
 hostlist: ./customer-hosts.txt
+ignorelist: ./ignored-hosts.txt
 profiles: [sas94, tomcat, postgres-wipds]
 audit: true
 strict: false

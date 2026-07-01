@@ -99,6 +99,12 @@ func TestFQDNDetector(t *testing.T) {
 
 		{"label too long rejected", "x" + repeat("a", 64) + ".com is too long", nil},
 		{"case insensitive tld", "fetched from API.EXAMPLE.COM today", []string{"API.EXAMPLE.COM"}},
+
+		{"jvm property catalina.home not fqdn", "-Dcatalina.home=/opt/tomcat", nil},
+		{"jvm property java.net not fqdn", "-Djava.net.preferIPv4Stack=true", nil},
+		{"jvm property com.sun not fqdn", "-Dcom.sun.management.jmxremote.port=1099", nil},
+		{"jvm property com.sas.svcs not fqdn", "-Dcom.sas.svcs.info=enabled", nil},
+		{"real hostname still caught without -D prefix", "Dcatalina.home is a literal hostname", []string{"Dcatalina.home"}},
 	}
 	d := FQDNDetector{}
 	for _, c := range cases {

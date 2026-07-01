@@ -65,6 +65,11 @@ func Sanitize(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	ignoreList, err := loadIgnoreList(opts.IgnorelistPath)
+	if err != nil {
+		return Result{}, err
+	}
+
 	extraTLDs, err := resolveExtraTLDs(opts.Profiles, log)
 	if err != nil {
 		return Result{}, err
@@ -72,6 +77,7 @@ func Sanitize(opts Options) (Result, error) {
 
 	chain := pipeline.DefaultDetectorChain(extraTLDs, allowlist)
 	p := pipeline.New(chain)
+	p.Ignore = ignoreList
 
 	runResult, err := pipeline.Run(p, pipeline.RunOptions{
 		InputDir:     opts.InputDir,
@@ -135,6 +141,23 @@ func loadAllowlist(hostlistPath string, log *runlog.Logger) ([]string, error) {
 		log.Warn("hostlist: %s", w)
 	}
 	return entries, nil
+}
+
+func loadIgnoreList(ignorelistPath string) (detect.IgnoreList, error) {
+	if ignorelistPath == "" {
+		return detect.IgnoreList{}, nil
+	}
+	f, err := os.Open(ignorelistPath)
+	if err != nil {
+		return detect.IgnoreList{}, inputErrorf("opening ignorelist %s: %w", ignorelistPath, err)
+	}
+	defer f.Close()
+
+	list, err := detect.LoadIgnoreList(f)
+	if err != nil {
+		return detect.IgnoreList{}, configErrorf("parsing ignorelist %s: %w", ignorelistPath, err)
+	}
+	return list, nil
 }
 
 // resolveExtraTLDs unions extra_internal_tlds across every requested

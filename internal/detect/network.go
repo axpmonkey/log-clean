@@ -179,6 +179,9 @@ func (d FQDNDetector) Detect(line string) []Match {
 	}
 	var matches []Match
 	for _, loc := range locs {
+		if IsJVMSystemPropertyKey(line, loc[0]) {
+			continue
+		}
 		candidate := line[loc[0]:loc[1]]
 		if !d.isValid(candidate) {
 			continue
@@ -190,6 +193,28 @@ func (d FQDNDetector) Detect(line string) []Match {
 		})
 	}
 	return matches
+}
+
+// IsJVMSystemPropertyKey reports whether the FQDN-shaped candidate starting
+// at byte offset start in line is actually the key half of a JVM system
+// property (e.g. "-Dcatalina.home=...", "-Djava.net.preferIPv4Stack=true",
+// "-Dcom.sun.management.jmxremote"). Dotted Java package/property names use
+// the same ordinary-English vocabulary as several pseudo-TLDs in
+// allowedTLDs (home, net, io, info, name, ...), so without this guard they
+// get misdetected as hostnames. The "-D" flag prefix is the reliable
+// syntactic signal here -- it doesn't require enumerating every JVM/vendor
+// package prefix (com.sun, com.sas, org.apache, javax, ...), which would
+// always be an incomplete list.
+//
+// Note the candidate itself starts with the "D", not after it: "D" and the
+// following letter are both word characters, so fqdnPattern's leading \b
+// anchors between "-" and "D", not between "D" and the property name.
+// Exported so the audit scanner (internal/audit) can apply the identical
+// guard -- without it, the audit pass's unredacted-fqdn rule would flag the
+// very JVM property keys this detector intentionally chose not to
+// tokenize as "unredacted PII", which would be a false positive.
+func IsJVMSystemPropertyKey(line string, start int) bool {
+	return start >= 1 && line[start-1] == '-' && start < len(line) && line[start] == 'D'
 }
 
 func (d FQDNDetector) isValid(s string) bool {

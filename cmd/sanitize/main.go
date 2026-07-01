@@ -31,10 +31,10 @@ func main() {
 }
 
 type flags struct {
-	input, output, mapping, hostlist, profiles, config string
-	audit, strict, reverseMode, auditOnly              bool
-	verbose, quiet, dryRun, noColor                    bool
-	showVersion, showHelp                              bool
+	input, output, mapping, hostlist, ignorelist, profiles, config string
+	audit, strict, reverseMode, auditOnly                          bool
+	verbose, quiet, dryRun, noColor                                bool
+	showVersion, showHelp                                          bool
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -49,6 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&f.mapping, "mapping", "", "path for mapping file (default: <output>/_mapping.json)")
 	fs.StringVar(&f.mapping, "m", "", "shorthand for --mapping")
 	fs.StringVar(&f.hostlist, "hostlist", "", "path to customer-supplied hostname allowlist")
+	fs.StringVar(&f.ignorelist, "ignorelist", "", "path to hostnames/domains to never redact (supports \"*.domain\" wildcards)")
 	fs.StringVar(&f.profiles, "profiles", "auto", `comma-separated profiles to apply, or "auto"`)
 	fs.BoolVar(&f.audit, "audit", true, "run audit pass after sanitization")
 	fs.BoolVar(&f.strict, "strict", false, "exit non-zero if audit finds High-severity suspicious tokens")
@@ -115,6 +116,9 @@ func applyConfigFile(f *flags, fs *flag.FlagSet, stderr io.Writer) int {
 	if cfg.Hostlist != "" && !explicit["hostlist"] {
 		f.hostlist = cfg.Hostlist
 	}
+	if cfg.Ignorelist != "" && !explicit["ignorelist"] {
+		f.ignorelist = cfg.Ignorelist
+	}
 	if len(cfg.Profiles) > 0 && !explicit["profiles"] {
 		f.profiles = strings.Join(cfg.Profiles, ",")
 	}
@@ -137,16 +141,17 @@ func runSanitize(f *flags, positional []string, stdout, stderr io.Writer) int {
 	}
 
 	opts := sanitize.Options{
-		InputDir:     input,
-		OutputDir:    f.output,
-		MappingPath:  f.mapping,
-		HostlistPath: f.hostlist,
-		Profiles:     splitProfiles(f.profiles),
-		AuditEnabled: f.audit,
-		Strict:       f.strict,
-		DryRun:       f.dryRun,
-		Verbose:      f.verbose,
-		ToolVersion:  version,
+		InputDir:       input,
+		OutputDir:      f.output,
+		MappingPath:    f.mapping,
+		HostlistPath:   f.hostlist,
+		IgnorelistPath: f.ignorelist,
+		Profiles:       splitProfiles(f.profiles),
+		AuditEnabled:   f.audit,
+		Strict:         f.strict,
+		DryRun:         f.dryRun,
+		Verbose:        f.verbose,
+		ToolVersion:    version,
 	}
 
 	result, err := sanitize.Sanitize(opts)
@@ -210,7 +215,7 @@ func runAuditOnly(f *flags, positional []string, stdout, stderr io.Writer) int {
 		return exitConfigError
 	}
 
-	findings, err := sanitize.AuditDirectory(dir)
+	findings, err := sanitize.AuditDirectory(dir, f.ignorelist)
 	if err != nil {
 		return reportError(err, stderr)
 	}
