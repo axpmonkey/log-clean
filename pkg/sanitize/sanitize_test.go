@@ -171,6 +171,61 @@ func TestSanitizeHostlistWiresAllowlistDetector(t *testing.T) {
 	}
 }
 
+func TestSanitizeIgnorelistDoesNotLeakEmailAtIgnoredDomain(t *testing.T) {
+	// Regression: an ignore entry like "*.sas.com" must only suppress
+	// host-shaped matches, not an email address whose text merely ends in
+	// the ignored domain -- otherwise the username in "jdoe@internal.sas.com"
+	// would leak into the output unredacted.
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "login jdoe@internal.sas.com from host db1.sas.com\n")
+
+	ignorePath := filepath.Join(t.TempDir(), "ignore.txt")
+	if err := os.WriteFile(ignorePath, []byte("*.sas.com\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	opts := Options{InputDir: inputDir, OutputDir: outputDir, IgnorelistPath: ignorePath, ToolVersion: "test"}
+	if _, err := Sanitize(opts); err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	out := string(got)
+	if strings.Contains(out, "jdoe") {
+		t.Errorf("email username leaked despite being at an ignored domain: %q", out)
+	}
+	if !strings.Contains(out, "EMAIL_001") {
+		t.Errorf("email at ignored domain should still be tokenized: %q", out)
+	}
+	// The bare host itself is what the ignore list is for -- it must pass through.
+	if !strings.Contains(out, "db1.sas.com") {
+		t.Errorf("ignored host should pass through untouched: %q", out)
+	}
+}
+
+func TestSanitizePreservesMissingFinalNewline(t *testing.T) {
+	// Regression: output must be byte-faithful to the input's line endings --
+	// a file with no trailing newline must not gain one.
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "host db-prod-01.acme.internal") // no trailing "\n"
+
+	opts := Options{InputDir: inputDir, OutputDir: outputDir, ToolVersion: "test"}
+	if _, err := Sanitize(opts); err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	if want := "host HOST_001"; string(got) != want {
+		t.Errorf("output = %q, want %q (no added trailing newline)", got, want)
+	}
+}
+
 func TestSanitizeHasHighFindingsReflectsAuditResult(t *testing.T) {
 	// Credentials inside a JDBC URL with a bare (non-dotted) host leak per
 	// the documented limitation in detect.CredentialsDetector -- this should

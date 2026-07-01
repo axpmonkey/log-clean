@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"sas-log-sanitize/internal/audit"
 	"sas-log-sanitize/internal/detect"
@@ -217,8 +218,16 @@ func profileNames(profiles []profile.Profile) string {
 func formatSummary(r pipeline.RunResult) string {
 	out := fmt.Sprintf("Files processed: %d\nFiles skipped: %d\nBytes processed: %d\n\nReplacements by category:\n",
 		r.FilesProcessed, len(r.FilesSkipped), r.BytesProcessed)
-	for cat, count := range r.ReplacementCounts {
-		out += fmt.Sprintf("  %s: %d\n", cat, count)
+	// Sort categories so the summary is byte-for-byte deterministic across
+	// runs -- ranging over the map directly would emit them in Go's
+	// randomized map-iteration order.
+	cats := make([]string, 0, len(r.ReplacementCounts))
+	for cat := range r.ReplacementCounts {
+		cats = append(cats, cat)
+	}
+	sort.Strings(cats)
+	for _, cat := range cats {
+		out += fmt.Sprintf("  %s: %d\n", cat, r.ReplacementCounts[cat])
 	}
 	if len(r.FilesSkipped) > 0 {
 		out += "\nSkipped files:\n"

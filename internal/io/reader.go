@@ -13,20 +13,18 @@ import (
 // truncate those, so LineReader scans manually instead.
 const MaxLineBytes = 16 * 1024 * 1024
 
-// LineEnding identifies the line terminator style of a source file.
+// LineEnding identifies the line terminator that followed a line in the
+// source file. None means the line had no terminator at all -- it can only
+// occur on a file's final line when the file does not end with a newline,
+// and it exists so the writer can reproduce that byte-for-byte instead of
+// silently appending a trailing newline the original didn't have.
 type LineEnding int
 
 const (
 	LF LineEnding = iota
 	CRLF
+	None
 )
-
-func (e LineEnding) Bytes() []byte {
-	if e == CRLF {
-		return []byte("\r\n")
-	}
-	return []byte("\n")
-}
 
 // LineReader reads lines from an underlying byte stream, decoding each line
 // from the source Encoding to a UTF-8 string and reporting the line-ending
@@ -65,13 +63,16 @@ func (lr *LineReader) ReadLine() (line string, ending LineEnding, err error) {
 		b, readErr := lr.br.ReadByte()
 		if readErr != nil {
 			if len(buf) > 0 {
+				// Trailing bytes with no terminator: this is the file's final
+				// line and it did not end with a newline. Report None so the
+				// writer reproduces the missing terminator exactly.
 				decoded, decErr := lr.decode(buf)
 				if decErr != nil {
-					return "", LF, decErr
+					return "", None, decErr
 				}
-				return decoded, LF, nil
+				return decoded, None, nil
 			}
-			return "", LF, readErr
+			return "", None, readErr
 		}
 		buf = append(buf, b)
 		if len(buf) > MaxLineBytes {

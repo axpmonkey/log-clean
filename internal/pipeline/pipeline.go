@@ -64,7 +64,7 @@ func (p *Pipeline) walk(line string) []detect.Match {
 			if state.IsProtected(m.Span.Start, m.Span.End) {
 				continue
 			}
-			if !p.Ignore.Empty() && p.Ignore.Matches(m.Value) {
+			if p.shouldIgnore(m) {
 				continue
 			}
 			state.Claim(m.Span)
@@ -72,4 +72,33 @@ func (p *Pipeline) walk(line string) []detect.Match {
 		}
 	}
 	return accepted
+}
+
+// shouldIgnore reports whether the ignore list suppresses match m. It is
+// deliberately scoped to host-shaped matches only: the ignore list names
+// hostnames/domains ("*.sas.com"), so applying it to a match's whole value
+// indiscriminately would wrongly suppress, say, an email address or LDAP DN
+// whose text merely ends in an ignored domain (e.g. "jdoe@corp.sas.com"),
+// leaking the username. So a bare HOST is matched directly; a URL or UNC
+// path is matched only on its embedded host/server -- and when that host is
+// ignored the whole URL/UNC match is dropped (not claimed), letting the
+// finer-grained detectors that run afterward still tokenize any sensitive
+// interior text (a username in a query string, say) around the ignored host.
+func (p *Pipeline) shouldIgnore(m detect.Match) bool {
+	if p.Ignore.Empty() {
+		return false
+	}
+	switch m.Category {
+	case "HOST":
+		return p.Ignore.Matches(m.Value)
+	case "URL":
+		if host, ok := detect.EmbeddedHost(m.Value); ok {
+			return p.Ignore.Matches(host)
+		}
+	case "UNC":
+		if server, ok := detect.EmbeddedUNCServer(m.Value); ok {
+			return p.Ignore.Matches(server)
+		}
+	}
+	return false
 }
