@@ -1,0 +1,177 @@
+# sas-log-sanitize
+
+A command-line tool that sanitizes SAS 9.4 support log bundles by replacing
+infrastructure identifiers, credentials, and PII with consistent, reversible
+tokens. The sanitized output is meant for feeding into AI assistants for root
+cause analysis; the original-to-token mapping stays on the analyst's local
+machine so findings can be translated back to real values for the duration of
+the support case.
+
+Intended audience: SAS support engineers and admins who need to share log
+bundles with AI assistants (or anyone else) without exposing customer
+hostnames, IPs, usernames, emails, or credentials.
+
+## Quick start
+
+```sh
+sas-log-sanitize -i /path/to/log-bundle -o /path/to/sanitized-output
+```
+
+This walks the input directory, replaces detected identifiers with tokens
+(`HOST_001`, `USER_001`, `IPV4_001`, ...), fully redacts credentials and
+secrets (`SECRET_REDACTED`), and writes the sanitized files plus a mapping
+file, audit report, summary, and runlog to the output directory.
+
+## Installation
+
+```sh
+go install sas-log-sanitize/cmd/sanitize@latest
+```
+
+Or build from source:
+
+```sh
+make build      # builds for your current platform into dist/
+make cross      # cross-compiles linux-amd64, windows-amd64, darwin-arm64
+```
+
+All `make` targets run inside a `golang:1.22` Docker container, so a local Go
+install isn't required. See the Makefile for details.
+
+Binary releases are not yet published; build from source for now.
+
+## Usage
+
+### Sanitize a bundle
+
+```sh
+sas-log-sanitize -i /path/to/log-bundle -o /path/to/output \
+  --hostlist customer-hosts.txt \
+  --strict
+```
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--input` / `-i` | required | Input directory containing logs |
+| `--output` / `-o` | `<input>-sanitized` | Output directory (created if missing) |
+| `--mapping` / `-m` | `<output>/_mapping.json` | Path for the mapping file |
+| `--hostlist` | none | Path to a customer-supplied hostname allowlist |
+| `--profiles` | `auto` | Comma-separated profiles to apply, or `auto` |
+| `--audit` | `true` | Run the audit pass after sanitization |
+| `--strict` | `false` | Print a clear warning and exit 1 if the audit finds High-severity suspicious tokens |
+| `--config` | none | Path to a YAML config file |
+| `--verbose` / `-v` | `false` | Verbose logging to the runlog |
+| `--quiet` / `-q` | `false` | Suppress non-error stdout output |
+| `--dry-run` | `false` | Show what would happen, write nothing |
+
+Exit codes: `0` clean, `1` audit found suspicious tokens, `2` input error,
+`3` processing error, `4` configuration error.
+
+### Reverse mode
+
+Translate tokens in a sanitized excerpt (or file) back to their original
+values, using the mapping file from the original run:
+
+```sh
+sas-log-sanitize --reverse /path/to/output/_mapping.json "saw HOST_001 fail"
+sas-log-sanitize --reverse /path/to/output/_mapping.json /path/to/excerpt.txt
+```
+
+`SECRET_REDACTED` is never reversible -- redacted secrets are never recorded
+anywhere, by design (see "The mapping file" below).
+
+### Audit-only mode
+
+Re-scan an already-sanitized directory for anything that looks like residual
+PII, without re-running sanitization:
+
+```sh
+sas-log-sanitize --audit-only /path/to/output --strict
+```
+
+## The mapping file
+
+`_mapping.json` is the reverse mapping from tokens back to real values
+(hostnames, IPs, usernames, emails, etc.). **It is the single most sensitive
+artifact this tool produces** -- treat it like a credential:
+
+- It is written with owner-only (`0600`) file permissions.
+- It is per-case and ephemeral by design: delete it (or move it to encrypted
+  storage) once the support case is closed. This tool does not implement
+  long-term mapping storage or cross-bundle consistency on purpose.
+- It never contains a password, API key, or other secret -- those are always
+  fully redacted (`SECRET_REDACTED`), never tokenized or recorded.
+- The sanitized log output itself, the audit report, the summary, and the
+  runlog are **not** sensitive in the same way and contain no real values.
+
+## The allowlist file
+
+`--hostlist` accepts a customer-supplied hostname allowlist: one hostname per
+line, comments allowed with `#`. It exists because some hostnames appear
+embedded inside compound strings the other detectors can't reliably parse
+out on their own (e.g. `/var/log/db-prod-01-archive/`), and because bare,
+non-dotted hostnames (no TLD) aren't caught by the FQDN detector at all.
+
+The allowlist detector does **literal substring matching**, not word-boundary
+matching -- it's the only detector that works this way. That means a short
+or non-distinctive entry (e.g. `db1`) will also match inside unrelated text
+(`db10`, `adb1x`). The tool warns at load time about entries shorter than 4
+characters or that are themselves substrings of another entry; prefer fully
+qualified or otherwise distinctive hostnames.
+
+## Limitations
+
+Be aware of these before relying on this tool for a sensitive bundle:
+
+- **No streaming/daemon mode.** On-demand processing only.
+- **No archive support.** Extract `.zip`/`.tar.gz`/etc. bundles before running.
+- **Binary files are skipped, not scrubbed.** Detected by extension
+  allowlist and a non-printable-byte-ratio heuristic; binary content
+  dominated by high bytes (0x80-0xFF) rather than control characters may not
+  always be detected as binary -- when in doubt, remove non-text files from
+  the bundle before running.
+- **SAS log line unwrapping is not implemented.** Wrapped/continuation lines
+  may cause a residual miss; the audit pass is the backstop, not a guarantee.
+- **SSH/PEM private keys are only partially redacted.** The `-----BEGIN/END
+  ... PRIVATE KEY-----` marker lines are redacted, but the multi-line base64
+  key body between them is not -- this tool processes one line at a time and
+  has no cross-line state yet. Remove embedded private keys from a bundle
+  before running this tool, don't rely on it for that case.
+- **JDBC/ActiveMQ connection strings with embedded credentials and a bare
+  (non-dotted) hostname** can leave that hostname untokenized, e.g.
+  `jdbc:postgresql://user:pass@dbprod01:5432/db` leaves `dbprod01` as plain
+  text (a dotted hostname like `db-prod-01.acme.internal` in the same
+  position is tokenized correctly). The audit pass's bare-word rules are the
+  backstop for this case.
+- **Per-file profile-driven detector tuning is partial.** Profile
+  auto-detection exists, but `extra_internal_tlds` is the only profile
+  override actually wired into detector behavior; `ipv4.skip_ranges` and
+  `allowlist.case_insensitive` from the config file are parsed but not yet
+  applied.
+- **No AIX support.** Linux, Windows, and macOS only.
+- **No CI/CD pipeline.** Local builds only for now.
+- **No cross-bundle consistency.** Each run gets a fresh token registry;
+  the same hostname in two different runs gets different tokens.
+
+## Documentation
+
+See [`docs/`](docs/) for more:
+
+- [`docs/usage.md`](docs/usage.md) -- detailed usage guide
+- [`docs/architecture.md`](docs/architecture.md) -- design rationale (two-pass
+  pipeline, span-claiming, detector ordering)
+- [`docs/detectors.md`](docs/detectors.md) -- per-detector behavior and known
+  limitations
+- [`docs/adding-detectors.md`](docs/adding-detectors.md) -- how to add a new
+  detector
+- [`docs/reversing.md`](docs/reversing.md) -- using the mapping file safely
+
+## License
+
+Apache License 2.0 -- see [LICENSE](LICENSE).
+
+## Contributing
+
+See [`docs/adding-detectors.md`](docs/adding-detectors.md) for the most
+common kind of contribution (a new detector). Run `make test` and `make lint`
+before submitting changes.

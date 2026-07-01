@@ -1,0 +1,7 @@
+name: geode
+filename_patterns:
+  - geode
+  - cache.log
+  - locator
+first_line_pattern: '^\[(info|warn|error|debug|severe)'
+extra_internal_tlds: []

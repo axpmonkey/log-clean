@@ -1,0 +1,6 @@
+name: postgres-wipds
+filename_patterns:
+  - wipds
+  - postgresql.log
+first_line_pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.*\bLOG:\b'
+extra_internal_tlds: []

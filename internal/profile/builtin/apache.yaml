@@ -1,0 +1,7 @@
+name: apache
+filename_patterns:
+  - access_log
+  - error_log
+  - httpd
+first_line_pattern: '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\s+-\s+-\s+\['
+extra_internal_tlds: []

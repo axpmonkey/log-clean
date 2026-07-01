@@ -1,0 +1,9 @@
+name: sas94
+filename_patterns:
+  - sas.log
+  - sasapp
+  - sasstudio
+  - workspace_server
+  - metadataserver
+first_line_pattern: '^NOTE: Copyright|^\d+\s+\S.*\bThe SAS System\b'
+extra_internal_tlds: []
