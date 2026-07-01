@@ -52,7 +52,7 @@ make build      # builds for your current platform into dist/
 make cross      # cross-compiles linux-amd64, windows-amd64, darwin-arm64
 ```
 
-All `make` targets run inside a `golang:1.22` Docker container, so a local Go
+All `make` targets run inside a `golang:1.26` Docker container, so a local Go
 install isn't required. See the Makefile for details.
 
 ## Usage
