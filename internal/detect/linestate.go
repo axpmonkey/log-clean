@@ -17,11 +17,22 @@ func NewLineState() *LineState {
 }
 
 // IsProtected reports whether [start, end) overlaps any already-claimed span.
+// spans is kept sorted by Start, so a binary search finds the first span that
+// could possibly start at or after `start`; the only other candidate is the
+// one span immediately before it (which starts earlier but may extend past
+// `start`). That makes this O(log n) instead of scanning every claimed span,
+// which matters on pathological lines with thousands of matches.
 func (ls *LineState) IsProtected(start, end int) bool {
-	for _, s := range ls.spans {
-		if start < s.End && end > s.Start {
-			return true
-		}
+	// i is the first span with Start >= start.
+	i := sort.Search(len(ls.spans), func(i int) bool { return ls.spans[i].Start >= start })
+	// That span overlaps iff it begins before `end`.
+	if i < len(ls.spans) && ls.spans[i].Start < end {
+		return true
+	}
+	// The span just before i starts earlier; it overlaps iff it extends past
+	// `start`.
+	if i > 0 && ls.spans[i-1].End > start {
+		return true
 	}
 	return false
 }

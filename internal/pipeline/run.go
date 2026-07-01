@@ -42,14 +42,6 @@ type SkippedFile struct {
 	Reason  string
 }
 
-type loadedFile struct {
-	relPath string
-	enc     ioenc.Encoding
-	hadBOM  bool
-	ending  ioenc.LineEnding
-	lines   []string
-}
-
 // Run discovers every file under opts.InputDir (in deterministic,
 // alphabetical-by-path order per plan Decision 1), then performs the
 // two-pass sanitization: Pass 1 (ScanLine) over every line of every file
@@ -58,6 +50,12 @@ type loadedFile struct {
 // and re-scans it with the audit package. In --dry-run mode, nothing is
 // written to disk, but both passes still run so the caller gets accurate
 // stats and audit findings.
+//
+// The two passes each re-read the files from disk rather than caching every
+// decoded line in memory between them: token numbering is stable because
+// both passes visit files (and lines) in the same order, and re-reading
+// keeps peak memory bounded by the single largest file instead of the whole
+// bundle's combined size.
 //
 // opts.InputDir may itself be a single file rather than a directory (e.g. a
 // lone log file instead of a whole bundle) -- in that case the sole
@@ -76,72 +74,44 @@ func Run(p *Pipeline, opts RunOptions, log *runlog.Logger) (RunResult, error) {
 		return RunResult{}, fmt.Errorf("discovering files in %s: %w", opts.InputDir, err)
 	}
 
-	var loaded []loadedFile
+	// Pass 1: scan every line of every file to build the token registry.
 	var bytesProcessed int64
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		rel, err := relFor(opts.InputDir, path, singleFile)
 		if err != nil {
-			return RunResult{}, fmt.Errorf("reading %s: %w", path, err)
+			return RunResult{}, err
 		}
-		bytesProcessed += int64(len(data))
-
-		enc, skip := ioenc.DetectBOM(data)
-		hadBOM := skip > 0
-		if !hadBOM {
-			enc = ioenc.DetectNoBOM(data)
+		n, err := scanFile(p, path, rel, log)
+		if err != nil {
+			return RunResult{}, err
 		}
-
-		lr := ioenc.NewLineReader(bytes.NewReader(data[skip:]), enc)
-		var lines []string
-		var ending ioenc.LineEnding
-		for {
-			line, le, err := lr.ReadLine()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return RunResult{}, fmt.Errorf("reading lines from %s: %w", path, err)
-			}
-			lines = append(lines, line)
-			ending = le
-		}
-
-		var rel string
-		if singleFile {
-			rel = filepath.Base(path)
-		} else {
-			rel, err = filepath.Rel(opts.InputDir, path)
-			if err != nil {
-				return RunResult{}, fmt.Errorf("computing relative path for %s: %w", path, err)
-			}
-		}
-		loaded = append(loaded, loadedFile{relPath: rel, enc: enc, hadBOM: hadBOM, ending: ending, lines: lines})
-
-		for _, line := range lines {
-			p.ScanLine(line)
-		}
-		log.Verbose("scanned %s: %d lines, encoding %s", rel, len(lines), enc)
+		bytesProcessed += n
 	}
-	log.Info("pass 1 complete: %d files scanned, %d bytes", len(loaded), bytesProcessed)
+	log.Info("pass 1 complete: %d files scanned, %d bytes", len(paths), bytesProcessed)
 
+	// Pass 2: re-read each file, replace tokens, write output, and audit.
 	scanner := audit.NewScanner()
 	scanner.Ignore = p.Ignore
 	var findings []audit.Finding
-	for _, lf := range loaded {
-		if err := replaceAndWriteFile(p, lf, opts, scanner, &findings, log); err != nil {
+	for _, path := range paths {
+		rel, err := relFor(opts.InputDir, path, singleFile)
+		if err != nil {
+			return RunResult{}, err
+		}
+		if err := replaceFile(p, path, rel, opts, scanner, &findings, log); err != nil {
 			return RunResult{}, err
 		}
 	}
-	log.Info("pass 2 complete: %d files written", len(loaded))
+	log.Info("pass 2 complete: %d files written", len(paths))
 
 	mf := p.Registry.ToMappingFile(opts.ToolVersion, opts.InputDir, tokenize.Stats{
-		FilesProcessed:         len(loaded),
+		FilesProcessed:         len(paths),
 		BytesProcessed:         bytesProcessed,
 		ReplacementsByCategory: p.ReplacementCounts(),
 	})
 
 	return RunResult{
-		FilesProcessed:    len(loaded),
+		FilesProcessed:    len(paths),
 		FilesSkipped:      skipped,
 		BytesProcessed:    bytesProcessed,
 		AuditFindings:     findings,
@@ -150,45 +120,114 @@ func Run(p *Pipeline, opts RunOptions, log *runlog.Logger) (RunResult, error) {
 	}, nil
 }
 
-func replaceAndWriteFile(p *Pipeline, lf loadedFile, opts RunOptions, scanner *audit.Scanner, findings *[]audit.Finding, log *runlog.Logger) error {
+// relFor returns the output-relative path for an input file: its base name
+// when the input is a single file, otherwise its path relative to the input
+// directory root.
+func relFor(root, path string, singleFile bool) (string, error) {
+	if singleFile {
+		return filepath.Base(path), nil
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", fmt.Errorf("computing relative path for %s: %w", path, err)
+	}
+	return rel, nil
+}
+
+// openDecoded reads path fully, detects its encoding/BOM, and returns a
+// LineReader positioned past any BOM. The whole file is read into memory,
+// but only one file at a time -- peak memory is bounded by the largest
+// single file, not the whole bundle.
+func openDecoded(path string) (lr *ioenc.LineReader, enc ioenc.Encoding, hadBOM bool, size int64, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, false, 0, fmt.Errorf("reading %s: %w", path, err)
+	}
+	enc, skip := ioenc.DetectBOM(data)
+	hadBOM = skip > 0
+	if !hadBOM {
+		enc = ioenc.DetectNoBOM(data)
+	}
+	return ioenc.NewLineReader(bytes.NewReader(data[skip:]), enc), enc, hadBOM, int64(len(data)), nil
+}
+
+// scanFile runs Pass 1 over a single file, returning its byte size.
+func scanFile(p *Pipeline, path, rel string, log *runlog.Logger) (int64, error) {
+	lr, enc, _, size, err := openDecoded(path)
+	if err != nil {
+		return 0, err
+	}
+	lineCount := 0
+	for {
+		line, _, err := lr.ReadLine()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, fmt.Errorf("reading lines from %s: %w", path, err)
+		}
+		p.ScanLine(line)
+		lineCount++
+	}
+	log.Verbose("scanned %s: %d lines, encoding %s", rel, lineCount, enc)
+	return size, nil
+}
+
+// replaceFile runs Pass 2 over a single file: re-read, replace, write (unless
+// dry-run), and audit. Each line is written with its own original terminator
+// (LineWriter.WriteLine), so mixed CRLF/LF endings and a missing final
+// newline are reproduced exactly rather than normalized.
+func replaceFile(p *Pipeline, path, rel string, opts RunOptions, scanner *audit.Scanner, findings *[]audit.Finding, log *runlog.Logger) error {
+	lr, enc, hadBOM, _, err := openDecoded(path)
+	if err != nil {
+		return err
+	}
+
 	var lw *ioenc.LineWriter
-	var f *os.File
 	if !opts.DryRun {
-		outPath := filepath.Join(opts.OutputDir, lf.relPath)
+		outPath := filepath.Join(opts.OutputDir, rel)
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 			return fmt.Errorf("creating output directory for %s: %w", outPath, err)
 		}
-		var err error
-		f, err = os.Create(outPath)
+		f, err := os.Create(outPath)
 		if err != nil {
 			return fmt.Errorf("creating %s: %w", outPath, err)
 		}
 		defer f.Close()
-		lw = ioenc.NewLineWriter(f, lf.enc, lf.ending)
-		if lf.hadBOM {
+		lw = ioenc.NewLineWriter(f, enc)
+		if hadBOM {
 			if err := lw.WriteBOM(); err != nil {
-				return fmt.Errorf("writing BOM for %s: %w", lf.relPath, err)
+				return fmt.Errorf("writing BOM for %s: %w", rel, err)
 			}
 		}
 	}
 
-	for i, line := range lf.lines {
+	lineNum := 0
+	for {
+		line, ending, err := lr.ReadLine()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("reading lines from %s: %w", path, err)
+		}
+		lineNum++
 		sanitized := p.ReplaceLine(line)
 		if lw != nil {
-			if err := lw.WriteLine(sanitized); err != nil {
-				return fmt.Errorf("writing %s: %w", lf.relPath, err)
+			if err := lw.WriteLine(sanitized, ending); err != nil {
+				return fmt.Errorf("writing %s: %w", rel, err)
 			}
 		}
 		if opts.AuditEnabled {
-			*findings = append(*findings, scanner.ScanLine(lf.relPath, i+1, sanitized)...)
+			*findings = append(*findings, scanner.ScanLine(rel, lineNum, sanitized)...)
 		}
 	}
 	if lw != nil {
 		if err := lw.Flush(); err != nil {
-			return fmt.Errorf("flushing %s: %w", lf.relPath, err)
+			return fmt.Errorf("flushing %s: %w", rel, err)
 		}
 	}
-	log.Verbose("replaced %s", lf.relPath)
+	log.Verbose("replaced %s", rel)
 	return nil
 }
 

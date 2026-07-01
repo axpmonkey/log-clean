@@ -5,19 +5,22 @@ import (
 	"io"
 )
 
-// LineWriter writes lines back out in the source file's encoding and line
-// ending, so sanitized output stays compatible with whatever downstream
-// tooling the customer was already using on the original bundle.
+// LineWriter writes lines back out in the source file's encoding, with each
+// line's own original terminator, so sanitized output stays byte-compatible
+// with whatever downstream tooling the customer was already using on the
+// original bundle -- including preserving mixed CRLF/LF endings and a
+// missing final newline.
 type LineWriter struct {
 	bw       *bufio.Writer
 	enc      Encoding
-	ending   LineEnding
 	wroteBOM bool
 }
 
-// NewLineWriter wraps w, encoding each line as enc and terminating it with ending.
-func NewLineWriter(w io.Writer, enc Encoding, ending LineEnding) *LineWriter {
-	return &LineWriter{bw: bufio.NewWriter(w), enc: enc, ending: ending}
+// NewLineWriter wraps w, encoding each line as enc. The line terminator is
+// supplied per line to WriteLine, not fixed here, so the reader's per-line
+// LineEnding can be reproduced exactly.
+func NewLineWriter(w io.Writer, enc Encoding) *LineWriter {
+	return &LineWriter{bw: bufio.NewWriter(w), enc: enc}
 }
 
 // WriteBOM writes the byte-order mark for the writer's encoding, if it has one.
@@ -40,22 +43,29 @@ func (lw *LineWriter) WriteBOM() error {
 }
 
 // WriteLine encodes line to the writer's source encoding and appends the
-// configured line ending, encoded in that same byte width (e.g. a UTF-16
-// file's "\r\n" is four bytes, not two — using ASCII terminator bytes on a
-// UTF-16 stream would corrupt the output).
-func (lw *LineWriter) WriteLine(line string) error {
+// given line ending, encoded in that same byte width (e.g. a UTF-16 file's
+// "\r\n" is four bytes, not two — using ASCII terminator bytes on a UTF-16
+// stream would corrupt the output). A None ending writes no terminator at
+// all, reproducing a final line that had no trailing newline in the source.
+func (lw *LineWriter) WriteLine(line string, ending LineEnding) error {
 	encoded := lw.encode(line)
 	if _, err := lw.bw.Write(encoded); err != nil {
 		return err
 	}
 	nl, cr := lw.enc.newlineBytes()
-	if lw.ending == CRLF {
+	switch ending {
+	case CRLF:
 		if _, err := lw.bw.Write(cr); err != nil {
 			return err
 		}
+		_, err := lw.bw.Write(nl)
+		return err
+	case LF:
+		_, err := lw.bw.Write(nl)
+		return err
+	default: // None: no terminator
+		return nil
 	}
-	_, err := lw.bw.Write(nl)
-	return err
 }
 
 func (lw *LineWriter) encode(s string) []byte {

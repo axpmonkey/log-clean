@@ -96,14 +96,14 @@ func TestLineReaderMaxLineBytesExceeded(t *testing.T) {
 
 func TestLineWriterUTF16LERoundTrip(t *testing.T) {
 	var buf bytes.Buffer
-	lw := NewLineWriter(&buf, UTF16LE, CRLF)
+	lw := NewLineWriter(&buf, UTF16LE)
 	if err := lw.WriteBOM(); err != nil {
 		t.Fatalf("WriteBOM: %v", err)
 	}
-	if err := lw.WriteLine("hostname: HOST_001"); err != nil {
+	if err := lw.WriteLine("hostname: HOST_001", CRLF); err != nil {
 		t.Fatalf("WriteLine: %v", err)
 	}
-	if err := lw.WriteLine("user: USER_001"); err != nil {
+	if err := lw.WriteLine("user: USER_001", CRLF); err != nil {
 		t.Fatalf("WriteLine: %v", err)
 	}
 	if err := lw.Flush(); err != nil {
@@ -130,11 +130,49 @@ func TestLineWriterUTF16LERoundTrip(t *testing.T) {
 
 func TestLineWriterPreservesLineEndingStyle(t *testing.T) {
 	var buf bytes.Buffer
-	lw := NewLineWriter(&buf, UTF8, LF)
-	lw.WriteLine("one")
-	lw.WriteLine("two")
+	lw := NewLineWriter(&buf, UTF8)
+	lw.WriteLine("one", LF)
+	lw.WriteLine("two", LF)
 	lw.Flush()
 	if buf.String() != "one\ntwo\n" {
 		t.Errorf("got %q, want LF-terminated lines", buf.String())
+	}
+}
+
+func TestLineReaderReportsFinalLineTerminators(t *testing.T) {
+	// A file whose last line has no trailing newline must report None on that
+	// line, and CRLF/LF must survive round-trips, so the writer can reproduce
+	// the original bytes rather than appending a newline the source lacked.
+	lr := NewLineReader(strings.NewReader("a\r\nb\nc"), UTF8)
+	want := []struct {
+		text   string
+		ending LineEnding
+	}{
+		{"a", CRLF},
+		{"b", LF},
+		{"c", None},
+	}
+	for i, w := range want {
+		line, ending, err := lr.ReadLine()
+		if err != nil {
+			t.Fatalf("ReadLine %d: %v", i, err)
+		}
+		if line != w.text || ending != w.ending {
+			t.Errorf("line %d = (%q, %v), want (%q, %v)", i, line, ending, w.text, w.ending)
+		}
+	}
+	if _, _, err := lr.ReadLine(); err != io.EOF {
+		t.Errorf("final ReadLine err = %v, want io.EOF", err)
+	}
+}
+
+func TestLineWriterNoneEndingWritesNoTerminator(t *testing.T) {
+	var buf bytes.Buffer
+	lw := NewLineWriter(&buf, UTF8)
+	lw.WriteLine("a", CRLF)
+	lw.WriteLine("b", None)
+	lw.Flush()
+	if buf.String() != "a\r\nb" {
+		t.Errorf("got %q, want %q (no trailing newline on final line)", buf.String(), "a\r\nb")
 	}
 }
