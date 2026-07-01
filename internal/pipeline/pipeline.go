@@ -11,6 +11,12 @@ import (
 	"sas-log-sanitize/internal/tokenize"
 )
 
+// SecretPlaceholder is the text that replaces any fully-redacted secret,
+// whether a single-line credential/secret (ReplaceLine) or a whole line
+// inside a multi-line PEM private-key block (Run's file-level block
+// redactor). Kept in one place so both paths emit the identical marker.
+const SecretPlaceholder = "SECRET_REDACTED"
+
 // Pipeline runs an ordered list of detectors over lines in two passes.
 type Pipeline struct {
 	// Detectors run in this exact order on every line; each detector's
@@ -40,6 +46,15 @@ func New(detectors []detect.Detector) *Pipeline {
 		Registry:          tokenize.NewRegistry(),
 		replacementCounts: make(map[string]int),
 	}
+}
+
+// CountLineRedaction records one whole-line redaction in the replacement
+// stats' synthetic "SECRET" bucket. Used by Run's file-level PEM block
+// redactor, which bypasses the per-line detector walk (the key body is
+// invisible to every single-line detector) and so must account for its own
+// redactions the way ReplaceLine does for the secrets it substitutes.
+func (p *Pipeline) CountLineRedaction() {
+	p.replacementCounts["SECRET"]++
 }
 
 // ReplacementCounts returns a copy of the per-category replacement

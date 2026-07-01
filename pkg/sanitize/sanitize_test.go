@@ -226,6 +226,66 @@ func TestSanitizePreservesMissingFinalNewline(t *testing.T) {
 	}
 }
 
+func TestSanitizeRedactsMultiLinePEMPrivateKeyBody(t *testing.T) {
+	// Regression: the base64 body lines between the BEGIN/END markers of an
+	// SSH/PEM private key must be redacted, not just the marker lines. A
+	// per-line detector can't see the body, so the pipeline's file-level
+	// block redactor handles it.
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "2026-06-30 INFO -----BEGIN RSA PRIVATE KEY-----\n"+
+		"MIIEpAIBAAKCAQEA1c7BODYLINEsecretmaterial0001\n"+
+		"mCLdMLYX0mMoreSecretKeyMaterialHere0002\n"+
+		"-----END RSA PRIVATE KEY-----\n"+
+		"2026-06-30 INFO login jdoe@acme.internal ok\n")
+
+	opts := Options{InputDir: inputDir, OutputDir: outputDir, ToolVersion: "test"}
+	if _, err := Sanitize(opts); err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	out := string(got)
+	for _, leak := range []string{"BODYLINEsecretmaterial", "MoreSecretKeyMaterial"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("key body leaked into output (%q):\n%s", leak, out)
+		}
+	}
+	// The block is four SECRET_REDACTED lines (markers + body), preserving the
+	// original line count, and normal detection resumes after the block.
+	wantLine := "2026-06-30 INFO login EMAIL_001 ok"
+	if !strings.Contains(out, wantLine) {
+		t.Errorf("detection did not resume after key block; output:\n%s", out)
+	}
+	if n := strings.Count(out, "SECRET_REDACTED"); n != 4 {
+		t.Errorf("got %d SECRET_REDACTED lines, want 4 (2 markers + 2 body):\n%s", n, out)
+	}
+}
+
+func TestSanitizeUnterminatedPEMKeyFailsClosed(t *testing.T) {
+	// A BEGIN marker with no matching END (truncated log) must redact through
+	// end of file rather than leak the remaining key material.
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "-----BEGIN OPENSSH PRIVATE KEY-----\n"+
+		"b3BlbnNzaC1rZXktSECRETtail0001\n"+
+		"b3BlbnNzaC1rZXktSECRETtail0002\n")
+
+	opts := Options{InputDir: inputDir, OutputDir: outputDir, ToolVersion: "test"}
+	if _, err := Sanitize(opts); err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	if strings.Contains(string(got), "SECRETtail") {
+		t.Errorf("unterminated key body leaked (should fail closed):\n%s", got)
+	}
+}
+
 func TestSanitizeHasHighFindingsReflectsAuditResult(t *testing.T) {
 	// Credentials inside a JDBC URL with a bare (non-dotted) host leak per
 	// the documented limitation in detect.CredentialsDetector -- this should

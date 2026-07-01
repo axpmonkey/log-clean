@@ -29,22 +29,30 @@ var (
 	sshKeyEndPattern   = regexp.MustCompile(`-----END (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----`)
 )
 
+// IsSSHPrivateKeyBegin reports whether line contains an SSH/PEM private-key
+// BEGIN marker. IsSSHPrivateKeyEnd is its counterpart for the END marker.
+// These exist because an SSH/PEM private key spans many lines (the BEGIN
+// marker, dozens of base64 body lines, then the END marker), and no
+// single-line detector can see the body -- each Detect call gets one line in
+// isolation. The pipeline's file-level block redactor (pipeline.Run) uses
+// these predicates to redact every line from BEGIN through END inclusive,
+// which is where the multi-line key body actually gets scrubbed. This
+// detector still redacts the BEGIN/END marker lines on their own (below) as
+// a backstop for callers that drive ScanLine/ReplaceLine directly without
+// the file-level loop, so the two share one marker definition.
+func IsSSHPrivateKeyBegin(line string) bool { return sshKeyBeginPattern.MatchString(line) }
+
+// IsSSHPrivateKeyEnd reports whether line contains an SSH/PEM private-key END
+// marker. See IsSSHPrivateKeyBegin.
+func IsSSHPrivateKeyEnd(line string) bool { return sshKeyEndPattern.MatchString(line) }
+
 // SecretsDetector finds API keys, tokens, JWTs, cloud provider credentials,
 // and SSH key markers, fully redacting them per plan Decision 5.
 //
-// Known limitation: SSH/PEM private keys span many lines (the BEGIN marker,
-// dozens of base64 body lines, then the END marker), but this detector --
-// like every detector in this package -- only ever sees one line at a time;
-// the pipeline has no cross-line state (see pipeline.Pipeline.ScanLine /
-// ReplaceLine). This detector redacts the BEGIN and END marker lines
-// themselves, but cannot redact the base64 key body lines in between without
-// the pipeline gaining file-level, multi-line state -- there is no orchestration
-// code yet that drives detectors across line boundaries within a file (that
-// lands when the CLI's file-walking loop is built). Until then, a captured
-// SSH private key body will leak into sanitized output verbatim. Flag this
-// to users prominently (README limitations section) and prioritize adding
-// multi-line block redaction before this tool is used on bundles known to
-// contain embedded private keys.
+// SSH/PEM private keys: this detector redacts the BEGIN and END marker lines,
+// but the multi-line base64 key body between them is redacted by the
+// pipeline's file-level block redactor (pipeline.Run), which has the
+// cross-line state a per-line detector lacks. See IsSSHPrivateKeyBegin.
 type SecretsDetector struct{}
 
 func (SecretsDetector) Name() string { return "secrets" }

@@ -9,10 +9,35 @@ import (
 	"sort"
 
 	"sas-log-sanitize/internal/audit"
+	"sas-log-sanitize/internal/detect"
 	ioenc "sas-log-sanitize/internal/io"
 	"sas-log-sanitize/internal/runlog"
 	"sas-log-sanitize/internal/tokenize"
 )
+
+// pemBlockRedactor tracks whether the current line falls inside a multi-line
+// PEM/SSH private-key block. No single-line detector can see a key body (each
+// Detect call gets one line in isolation), so the file-level scan/replace
+// loops consult one of these -- fresh per file, so state can never leak
+// across files -- to redact every line from the BEGIN marker through the END
+// marker inclusive.
+//
+// It fails closed: a BEGIN with no matching END (a truncated log) leaves the
+// redactor in-block through end of file, over-redacting rather than leaking
+// the tail of a key.
+type pemBlockRedactor struct{ inBlock bool }
+
+// redacts reports whether line must be wholesale redacted -- either it is
+// already inside an open key block, or it opens one -- and advances the
+// state. A line that both opens and closes a block (a single-line key) is
+// redacted and leaves the redactor closed.
+func (r *pemBlockRedactor) redacts(line string) bool {
+	if r.inBlock || detect.IsSSHPrivateKeyBegin(line) {
+		r.inBlock = !detect.IsSSHPrivateKeyEnd(line)
+		return true
+	}
+	return false
+}
 
 // RunOptions configures a full directory-to-directory sanitization run. The
 // detector chain itself lives on the *Pipeline passed to Run, not here --
@@ -158,6 +183,7 @@ func scanFile(p *Pipeline, path, rel string, log *runlog.Logger) (int64, error) 
 		return 0, err
 	}
 	lineCount := 0
+	var pem pemBlockRedactor
 	for {
 		line, _, err := lr.ReadLine()
 		if err == io.EOF {
@@ -166,8 +192,13 @@ func scanFile(p *Pipeline, path, rel string, log *runlog.Logger) (int64, error) 
 		if err != nil {
 			return 0, fmt.Errorf("reading lines from %s: %w", path, err)
 		}
-		p.ScanLine(line)
 		lineCount++
+		// Lines inside a PEM key block are wholesale-redacted in Pass 2, so
+		// their contents must never be scanned into the token registry here.
+		if pem.redacts(line) {
+			continue
+		}
+		p.ScanLine(line)
 	}
 	log.Verbose("scanned %s: %d lines, encoding %s", rel, lineCount, enc)
 	return size, nil
@@ -203,6 +234,7 @@ func replaceFile(p *Pipeline, path, rel string, opts RunOptions, scanner *audit.
 	}
 
 	lineNum := 0
+	var pem pemBlockRedactor
 	for {
 		line, ending, err := lr.ReadLine()
 		if err == io.EOF {
@@ -212,7 +244,18 @@ func replaceFile(p *Pipeline, path, rel string, opts RunOptions, scanner *audit.
 			return fmt.Errorf("reading lines from %s: %w", path, err)
 		}
 		lineNum++
-		sanitized := p.ReplaceLine(line)
+		// A line inside a PEM key block is redacted whole -- the multi-line
+		// key body is invisible to the per-line detectors ReplaceLine drives,
+		// so it's scrubbed here instead. The line still flows through the
+		// common write+audit path below (one SECRET_REDACTED per body line
+		// keeps line numbers aligned with the original).
+		var sanitized string
+		if pem.redacts(line) {
+			sanitized = SecretPlaceholder
+			p.CountLineRedaction()
+		} else {
+			sanitized = p.ReplaceLine(line)
+		}
 		if lw != nil {
 			if err := lw.WriteLine(sanitized, ending); err != nil {
 				return fmt.Errorf("writing %s: %w", rel, err)
