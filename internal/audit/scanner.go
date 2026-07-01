@@ -76,6 +76,13 @@ type rule struct {
 // Scanner holds the set of audit rules to run against sanitized text.
 type Scanner struct {
 	rules []rule
+
+	// Ignore, if set, mirrors the sanitization pipeline's --ignorelist: a
+	// hostname/FQDN this scanner would otherwise flag as unredacted-fqdn is
+	// suppressed if it matches, since the sanitizer intentionally left it
+	// untouched (e.g. "*.sas.com") rather than missing it. Left as the zero
+	// value (Empty()) when no --ignorelist is configured.
+	Ignore detect.IgnoreList
 }
 
 // NewScanner returns a Scanner configured with every rule from the plan's
@@ -83,7 +90,8 @@ type Scanner struct {
 // real instance should already have become a CATEGORY_NNN token or
 // SECRET_REDACTED.
 func NewScanner() *Scanner {
-	return &Scanner{rules: []rule{
+	s := &Scanner{}
+	s.rules = []rule{
 		// Shares detect.LooksLikeVersionString with the IPv4 detector so a
 		// version string the detector intentionally left untouched (e.g.
 		// "SAS 9.4.1.2") isn't then flagged here as unredacted PII.
@@ -100,7 +108,7 @@ func NewScanner() *Scanner {
 		// shape regex. High findings need to stay rare on real sanitized
 		// output for --strict to be usable.
 		{name: "unredacted-fqdn", severity: SeverityHigh,
-			find: findValidFQDNs},
+			find: func(line string) [][2]int { return findValidFQDNs(line, s.Ignore) }},
 
 		{name: "email-shape", severity: SeverityHigh,
 			pattern: regexp.MustCompile(`\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b`)},
@@ -134,7 +142,8 @@ func NewScanner() *Scanner {
 
 		{name: "unix-path-with-username", severity: SeverityMedium,
 			find: findUnixPathWithNonTokenUsername},
-	}}
+	}
+	return s
 }
 
 // ScanLine returns every audit finding on a single already-sanitized line.
@@ -172,12 +181,20 @@ func (s *Scanner) ScanLine(file string, lineNum int, line string) []Finding {
 // findValidFQDNs, the same two-step validation the real detector uses.
 var fqdnCandidatePattern = regexp.MustCompile(`\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b`)
 
-func findValidFQDNs(line string) [][2]int {
+func findValidFQDNs(line string, ignore detect.IgnoreList) [][2]int {
 	var out [][2]int
 	for _, loc := range fqdnCandidatePattern.FindAllStringIndex(line, -1) {
-		if detect.IsValidFQDN(line[loc[0]:loc[1]]) {
-			out = append(out, [2]int{loc[0], loc[1]})
+		if detect.IsJVMSystemPropertyKey(line, loc[0]) {
+			continue
 		}
+		candidate := line[loc[0]:loc[1]]
+		if !detect.IsValidFQDN(candidate) {
+			continue
+		}
+		if !ignore.Empty() && ignore.Matches(candidate) {
+			continue
+		}
+		out = append(out, [2]int{loc[0], loc[1]})
 	}
 	return out
 }

@@ -26,14 +26,21 @@ var ownArtifactNames = map[string]bool{
 // AuditDirectory re-scans every file in an already-sanitized directory for
 // patterns that look like residual PII, for the --audit-only CLI mode. It
 // applies the same binary-file skipping and encoding detection as a normal
-// sanitize run.
-func AuditDirectory(dir string) ([]audit.Finding, error) {
+// sanitize run. ignorelistPath, if set, is loaded the same way as a normal
+// run's --ignorelist, so hostnames the original run deliberately left
+// untouched (e.g. "*.sas.com") aren't re-flagged here as unredacted PII.
+func AuditDirectory(dir string, ignorelistPath string) ([]audit.Finding, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, inputErrorf("audit directory %s: %w", dir, err)
 	}
 	if !info.IsDir() {
 		return nil, inputErrorf("audit path %s is not a directory", dir)
+	}
+
+	ignoreList, err := loadIgnoreList(ignorelistPath)
+	if err != nil {
+		return nil, err
 	}
 
 	var paths []string
@@ -56,6 +63,7 @@ func AuditDirectory(dir string) ([]audit.Finding, error) {
 	sort.Strings(paths)
 
 	scanner := audit.NewScanner()
+	scanner.Ignore = ignoreList
 	var findings []audit.Finding
 	for _, path := range paths {
 		rel, err := filepath.Rel(dir, path)

@@ -108,6 +108,7 @@ func Run(p *Pipeline, opts RunOptions, log *runlog.Logger) (RunResult, error) {
 	log.Info("pass 1 complete: %d files scanned, %d bytes", len(loaded), bytesProcessed)
 
 	scanner := audit.NewScanner()
+	scanner.Ignore = p.Ignore
 	var findings []audit.Finding
 	for _, lf := range loaded {
 		if err := replaceAndWriteFile(p, lf, opts, scanner, &findings, log); err != nil {

@@ -19,6 +19,12 @@ type Pipeline struct {
 	Detectors []detect.Detector
 	Registry  *tokenize.Registry
 
+	// Ignore, if set, suppresses any detector match whose value it matches
+	// (see detect.IgnoreList) -- the original text is left untouched rather
+	// than tokenized. Left as the zero value (Empty()) when no --ignorelist
+	// is configured, so the check is a no-op on the common path.
+	Ignore detect.IgnoreList
+
 	// replacementCounts tracks actual substitution occurrences per category
 	// (plus the synthetic "SECRET" key for redactions) across every
 	// ReplaceLine call, for the mapping file's stats.replacements_by_category
@@ -56,6 +62,9 @@ func (p *Pipeline) walk(line string) []detect.Match {
 	for _, d := range p.Detectors {
 		for _, m := range d.Detect(line) {
 			if state.IsProtected(m.Span.Start, m.Span.End) {
+				continue
+			}
+			if !p.Ignore.Empty() && p.Ignore.Matches(m.Value) {
 				continue
 			}
 			state.Claim(m.Span)
