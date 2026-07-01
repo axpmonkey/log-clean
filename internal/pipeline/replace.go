@@ -31,7 +31,7 @@ func (p *Pipeline) ReplaceLine(line string) string {
 		}
 		sb.WriteString(line[pos:m.Span.Start])
 		if m.Redact {
-			sb.WriteString("SECRET_REDACTED")
+			sb.WriteString(SecretPlaceholder)
 			p.replacementCounts["SECRET"]++
 		} else if tok, ok := p.Registry.Lookup(m.Category, m.Value); ok {
 			sb.WriteString(tok)

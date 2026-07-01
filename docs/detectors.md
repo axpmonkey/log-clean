@@ -8,7 +8,7 @@ fixed order defined by `pipeline.DefaultDetectorChain`.
 |---|---|---|---|
 | `UUIDDetector` | (none) | Claim-only | Never replaced; just blocks other detectors from matching inside a UUID. |
 | `CredentialsDetector` | `USER` (for embedded usernames) / redact | Redact values, pseudonymize usernames | Password/pwd/secret key=value forms, SAS `OPTIONS METAUSER`/`METAPASS`, JDBC/ActiveMQ embedded creds, LDAP bind passwords. See known JDBC/bare-host limitation in its doc comment. |
-| `SecretsDetector` | redact | Redact | AWS keys, JWTs, Bearer tokens, GCP private_key JSON fields, SSH/PEM BEGIN/END marker lines (body not redacted -- see README limitations). |
+| `SecretsDetector` | redact | Redact | AWS keys, JWTs, Bearer tokens, GCP private_key JSON fields, SSH/PEM BEGIN/END marker lines. The multi-line key *body* between the markers is redacted separately by the file-level PEM block redactor in `pipeline.Run` (a per-line detector can't see it). |
 | `DNDetector` | `DN` | Pseudonymize | Whole LDAP DN tokenized as one unit. |
 | `EmailDetector` | `EMAIL` | Pseudonymize | |
 | `URLDetector` | `URL` | Pseudonymize whole value | Embedded host cross-registered into `HOST` (see architecture.md). |
@@ -30,8 +30,6 @@ fixed order defined by `pipeline.DefaultDetectorChain`.
   untokenized (the URL detector's whole-match candidate gets discarded by
   the partial-overlap rule; a dotted hostname self-heals via the FQDN
   detector re-scanning independently, a bare one doesn't).
-- SSH/PEM private key bodies (the lines between BEGIN/END) are not
-  redacted -- no cross-line state yet.
 - Kerberos principals with a dotted, uppercase realm are usually classified
   as `EMAIL` rather than `KRB` (still safely tokenized, just a different
   category).

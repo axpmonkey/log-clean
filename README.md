@@ -168,11 +168,6 @@ Be aware of these before relying on this tool for a sensitive bundle:
   the bundle before running.
 - **SAS log line unwrapping is not implemented.** Wrapped/continuation lines
   may cause a residual miss; the audit pass is the backstop, not a guarantee.
-- **SSH/PEM private keys are only partially redacted.** The `-----BEGIN/END
-  ... PRIVATE KEY-----` marker lines are redacted, but the multi-line base64
-  key body between them is not -- this tool processes one line at a time and
-  has no cross-line state yet. Remove embedded private keys from a bundle
-  before running this tool, don't rely on it for that case.
 - **JDBC/ActiveMQ connection strings with embedded credentials and a bare
   (non-dotted) hostname** can leave that hostname untokenized, e.g.
   `jdbc:postgresql://user:pass@dbprod01:5432/db` leaves `dbprod01` as plain
