@@ -27,11 +27,25 @@ the output directory.
 
 ## Installation
 
+Pre-built binaries are checked into [`dist/`](dist/) -- clone the repo and run
+the one matching your platform, no Go toolchain required:
+
+| Platform | Binary |
+|---|---|
+| Linux (amd64) | `dist/sas-log-sanitize-linux-amd64` |
+| Windows (amd64) | `dist/sas-log-sanitize-windows-amd64.exe` |
+| macOS (arm64) | `dist/sas-log-sanitize-darwin-arm64` |
+
 ```sh
-go install sas-log-sanitize/cmd/sanitize@latest
+git clone git@github.com:axpmonkey/log-clean.git
+./log-clean/dist/sas-log-sanitize-linux-amd64 -i /path/to/log-bundle -o /path/to/sanitized-output
 ```
 
-Or build from source:
+On macOS/Linux, mark it executable first if needed: `chmod +x dist/sas-log-sanitize-*`.
+
+### Building from source
+
+Only needed if you're changing the tool itself, or `dist/` is out of date:
 
 ```sh
 make build      # builds for your current platform into dist/
@@ -40,8 +54,6 @@ make cross      # cross-compiles linux-amd64, windows-amd64, darwin-arm64
 
 All `make` targets run inside a `golang:1.22` Docker container, so a local Go
 install isn't required. See the Makefile for details.
-
-Binary releases are not yet published; build from source for now.
 
 ## Usage
 
