@@ -36,12 +36,12 @@ func Sanitize(opts Options) (Result, error) {
 	}
 	opts = opts.applyDefaults()
 
-	info, err := os.Stat(opts.InputDir)
+	// opts.InputDir may name either a directory (a full log bundle) or a
+	// single file -- pipeline.Run's discoverFiles/relPath logic handles
+	// both, so the only thing checked here is that the path exists at all.
+	_, err := os.Stat(opts.InputDir)
 	if err != nil {
-		return Result{}, inputErrorf("input directory %s: %w", opts.InputDir, err)
-	}
-	if !info.IsDir() {
-		return Result{}, inputErrorf("input path %s is not a directory", opts.InputDir)
+		return Result{}, inputErrorf("input path %s: %w", opts.InputDir, err)
 	}
 
 	var logWriter io.Writer = io.Discard

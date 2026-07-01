@@ -58,7 +58,19 @@ type loadedFile struct {
 // and re-scans it with the audit package. In --dry-run mode, nothing is
 // written to disk, but both passes still run so the caller gets accurate
 // stats and audit findings.
+//
+// opts.InputDir may itself be a single file rather than a directory (e.g. a
+// lone log file instead of a whole bundle) -- in that case the sole
+// "relative path" is just the file's own base name, since
+// filepath.Rel(file, file) would otherwise yield "." and collide with
+// opts.OutputDir itself when building the output path.
 func Run(p *Pipeline, opts RunOptions, log *runlog.Logger) (RunResult, error) {
+	inputInfo, err := os.Stat(opts.InputDir)
+	if err != nil {
+		return RunResult{}, fmt.Errorf("statting %s: %w", opts.InputDir, err)
+	}
+	singleFile := !inputInfo.IsDir()
+
 	paths, skipped, err := discoverFiles(opts.InputDir, log)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("discovering files in %s: %w", opts.InputDir, err)
@@ -94,9 +106,14 @@ func Run(p *Pipeline, opts RunOptions, log *runlog.Logger) (RunResult, error) {
 			ending = le
 		}
 
-		rel, err := filepath.Rel(opts.InputDir, path)
-		if err != nil {
-			return RunResult{}, fmt.Errorf("computing relative path for %s: %w", path, err)
+		var rel string
+		if singleFile {
+			rel = filepath.Base(path)
+		} else {
+			rel, err = filepath.Rel(opts.InputDir, path)
+			if err != nil {
+				return RunResult{}, fmt.Errorf("computing relative path for %s: %w", path, err)
+			}
 		}
 		loaded = append(loaded, loadedFile{relPath: rel, enc: enc, hadBOM: hadBOM, ending: ending, lines: lines})
 
@@ -183,16 +200,28 @@ func discoverFiles(root string, log *runlog.Logger) ([]string, []SkippedFile, er
 	var files []string
 	var skipped []SkippedFile
 
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	singleFile := !rootInfo.IsDir()
+
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
+		var rel string
+		if singleFile {
+			rel = filepath.Base(path)
+		} else {
+			var relErr error
+			rel, relErr = filepath.Rel(root, path)
+			if relErr != nil {
+				rel = path
+			}
 		}
 
 		if ioenc.IsSkippedExtension(path) {

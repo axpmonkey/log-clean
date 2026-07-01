@@ -42,7 +42,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var f flags
-	fs.StringVar(&f.input, "input", "", "input directory containing logs")
+	fs.StringVar(&f.input, "input", "", "input directory containing logs, or a single log file")
 	fs.StringVar(&f.input, "i", "", "shorthand for --input")
 	fs.StringVar(&f.output, "output", "", "output directory (default: <input>-sanitized)")
 	fs.StringVar(&f.output, "o", "", "shorthand for --output")
