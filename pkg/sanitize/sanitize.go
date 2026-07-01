@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"sas-log-sanitize/internal/audit"
 	"sas-log-sanitize/internal/detect"
@@ -77,7 +78,7 @@ func Sanitize(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	extraTLDs, err := resolveExtraTLDs(opts.Profiles, log)
+	extraTLDs, err := resolveExtraTLDs(opts.Profiles, opts.ExtraInternalTLDs, log)
 	if err != nil {
 		return Result{}, err
 	}
@@ -192,10 +193,11 @@ func parseSkipRanges(cidrs []string) ([]netip.Prefix, error) {
 	return prefixes, nil
 }
 
-// resolveExtraTLDs unions extra_internal_tlds across every requested
-// profile (or every built-in profile, for "auto"/unset). See doc.go's scope
-// note: this is a whole-run union, not a true per-file profile selection.
-func resolveExtraTLDs(requested []string, log *runlog.Logger) ([]string, error) {
+// resolveExtraTLDs unions extra_internal_tlds across every requested profile
+// (or every built-in profile, for "auto"/unset) with the config file's own
+// detectors.fqdn.extra_internal_tlds (configTLDs). See doc.go's scope note:
+// this is a whole-run union, not a true per-file profile selection.
+func resolveExtraTLDs(requested []string, configTLDs []string, log *runlog.Logger) ([]string, error) {
 	builtin, err := profile.LoadBuiltin()
 	if err != nil {
 		return nil, processingErrorf("loading built-in profiles: %w", err)
@@ -221,16 +223,24 @@ func resolveExtraTLDs(requested []string, log *runlog.Logger) ([]string, error) 
 		}
 	}
 
+	// Dedup case-insensitively, since the FQDN detector lowercases extra TLDs
+	// anyway (detect.NewFQDNDetectorWithExtraTLDs); keep first-seen casing.
 	seen := map[string]bool{}
 	var extra []string
-	for _, p := range selected {
-		for _, tld := range p.ExtraInternalTLDs {
-			if !seen[tld] {
-				seen[tld] = true
+	add := func(tlds []string) {
+		for _, tld := range tlds {
+			key := strings.ToLower(tld)
+			if !seen[key] {
+				seen[key] = true
 				extra = append(extra, tld)
 			}
 		}
 	}
+	for _, p := range selected {
+		add(p.ExtraInternalTLDs)
+	}
+	add(configTLDs)
+
 	log.Info("profiles in effect: %s (extra TLDs: %v)", profileNames(selected), extra)
 	return extra, nil
 }

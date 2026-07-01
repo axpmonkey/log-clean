@@ -5,12 +5,11 @@
 // Scope note: most detection logic in this tool is format-agnostic -- the
 // same detector chain runs regardless of which profile is active. A
 // profile's main jobs are (1) auto-detection, so the runlog/summary can
-// label which format a file looked like, and (2) the one additive detector
-// override actually wired through so far: ExtraInternalTLDs, merged into the
-// FQDN detector's TLD allowlist (see detect.NewFQDNDetectorWithExtraTLDs).
-// The plan's example config also shows ipv4.skip_ranges and
-// allowlist.case_insensitive overrides; those are not implemented yet --
-// flagging that explicitly rather than silently no-op-ing them.
+// label which format a file looked like, and (2) contributing
+// ExtraInternalTLDs, merged into the FQDN detector's TLD allowlist (see
+// detect.NewFQDNDetectorWithExtraTLDs). The config file's own detector
+// overrides (fqdn.extra_internal_tlds, ipv4.skip_ranges,
+// allowlist.case_insensitive) are applied separately in pkg/sanitize.
 package profile
 
 import (

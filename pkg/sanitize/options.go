@@ -27,6 +27,10 @@ type Options struct {
 	// AllowlistCaseInsensitive makes the hostname allowlist (HostlistPath)
 	// match regardless of case, from detectors.allowlist.case_insensitive.
 	AllowlistCaseInsensitive bool
+	// ExtraInternalTLDs are additional pseudo-TLDs to treat as valid hosts,
+	// from detectors.fqdn.extra_internal_tlds. They are unioned with the
+	// extras contributed by the active Profiles.
+	ExtraInternalTLDs []string
 	// Profiles selects which built-in profiles' extra_internal_tlds get
 	// merged into the FQDN detector. ["auto"] (the default) merges every
 	// built-in profile's extras for the whole run -- per-file profile

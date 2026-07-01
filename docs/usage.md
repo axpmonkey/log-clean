@@ -109,9 +109,9 @@ file's values. Detector overrides:
 - `detectors.allowlist.case_insensitive` — match `--hostlist` entries
   regardless of case. The token still records the exact text from the log,
   so reverse mode restores original casing.
-- `detectors.fqdn.extra_internal_tlds` — parsed but not yet consumed from the
-  config file; extra FQDN TLDs currently come only from the built-in
-  profiles' `extra_internal_tlds`.
+- `detectors.fqdn.extra_internal_tlds` — additional pseudo-TLDs to treat as
+  valid hostnames (e.g. a customer's internal `acmecorp` suffix), unioned
+  with any extras contributed by the active profiles.
 
 ## Dry run
 

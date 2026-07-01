@@ -40,6 +40,7 @@ type flags struct {
 	// applyConfigFile from the config's detectors section.
 	ipv4SkipRanges           []string
 	allowlistCaseInsensitive bool
+	extraInternalTLDs        []string
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -127,6 +128,7 @@ func applyConfigFile(f *flags, fs *flag.FlagSet, stderr io.Writer) int {
 	// These have no CLI flag, so they come straight from the config file.
 	f.ipv4SkipRanges = cfg.Detectors.IPv4.SkipRanges
 	f.allowlistCaseInsensitive = cfg.Detectors.Allowlist.CaseInsensitive
+	f.extraInternalTLDs = cfg.Detectors.FQDN.ExtraInternalTLDs
 	if len(cfg.Profiles) > 0 && !explicit["profiles"] {
 		f.profiles = strings.Join(cfg.Profiles, ",")
 	}
@@ -156,6 +158,7 @@ func runSanitize(f *flags, positional []string, stdout, stderr io.Writer) int {
 		IgnorelistPath:           f.ignorelist,
 		IPv4SkipRanges:           f.ipv4SkipRanges,
 		AllowlistCaseInsensitive: f.allowlistCaseInsensitive,
+		ExtraInternalTLDs:        f.extraInternalTLDs,
 		Profiles:                 splitProfiles(f.profiles),
 		AuditEnabled:             f.audit,
 		Strict:                   f.strict,

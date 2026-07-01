@@ -8,7 +8,8 @@
 // yet build a separate detector chain per file based on that detection.
 // Instead, Options.Profiles selects which built-in profiles'
 // extra_internal_tlds get unioned into a single FQDN detector shared across
-// the whole run. Full per-file profile-driven detector tuning (the plan's
-// ipv4.skip_ranges and allowlist.case_insensitive config overrides) is not
-// implemented.
+// the whole run. The config file's detector overrides
+// (detectors.fqdn.extra_internal_tlds, ipv4.skip_ranges, and
+// allowlist.case_insensitive) are applied as whole-run settings, not
+// per-file.
 package sanitize
