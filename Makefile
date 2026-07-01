@@ -1,4 +1,4 @@
-GO_IMAGE := golang:1.22
+GO_IMAGE := golang:1.26
 VERSION := 0.1.0-dev
 
 # Host OS/ARCH in Go's naming, so `make build` produces a binary you can run
