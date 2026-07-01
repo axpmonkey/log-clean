@@ -15,12 +15,15 @@ hostnames, IPs, usernames, emails, or credentials.
 
 ```sh
 sas-log-sanitize -i /path/to/log-bundle -o /path/to/sanitized-output
+# or a single file:
+sas-log-sanitize -i /path/to/single.log -o /path/to/sanitized-output
 ```
 
-This walks the input directory, replaces detected identifiers with tokens
-(`HOST_001`, `USER_001`, `IPV4_001`, ...), fully redacts credentials and
-secrets (`SECRET_REDACTED`), and writes the sanitized files plus a mapping
-file, audit report, summary, and runlog to the output directory.
+This walks the input (a directory or a single file), replaces detected
+identifiers with tokens (`HOST_001`, `USER_001`, `IPV4_001`, ...), fully
+redacts credentials and secrets (`SECRET_REDACTED`), and writes the
+sanitized files plus a mapping file, audit report, summary, and runlog to
+the output directory.
 
 ## Installation
 
@@ -52,10 +55,11 @@ sas-log-sanitize -i /path/to/log-bundle -o /path/to/output \
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--input` / `-i` | required | Input directory containing logs |
+| `--input` / `-i` | required | Input directory containing logs, or a single log file |
 | `--output` / `-o` | `<input>-sanitized` | Output directory (created if missing) |
 | `--mapping` / `-m` | `<output>/_mapping.json` | Path for the mapping file |
 | `--hostlist` | none | Path to a customer-supplied hostname allowlist |
+| `--ignorelist` | none | Path to hostnames/domains to never redact (supports `*.domain` wildcards) |
 | `--profiles` | `auto` | Comma-separated profiles to apply, or `auto` |
 | `--audit` | `true` | Run the audit pass after sanitization |
 | `--strict` | `false` | Print a clear warning and exit 1 if the audit finds High-severity suspicious tokens |
@@ -89,6 +93,9 @@ PII, without re-running sanitization:
 sas-log-sanitize --audit-only /path/to/output --strict
 ```
 
+Pass `--ignorelist` here too if the original run used one, so hostnames it
+intentionally left untouched aren't re-flagged as residual PII.
+
 ## The mapping file
 
 `_mapping.json` is the reverse mapping from tokens back to real values
@@ -118,6 +125,23 @@ or non-distinctive entry (e.g. `db1`) will also match inside unrelated text
 (`db10`, `adb1x`). The tool warns at load time about entries shorter than 4
 characters or that are themselves substrings of another entry; prefer fully
 qualified or otherwise distinctive hostnames.
+
+## The ignorelist file
+
+`--ignorelist` is the inverse of `--hostlist`: it names hostnames/domains
+that should **never** be tokenized or redacted, even if a detector would
+otherwise match them. Useful for a noisy but non-sensitive vendor domain
+that shows up constantly (e.g. license-check or support-portal URLs). One
+entry per line, comments allowed with `#`:
+
+```
+license.example.com
+*.sas.com
+```
+
+A bare entry matches that exact hostname (case-insensitively); a
+`*.domain` entry matches the domain itself and any subdomain. `--ignorelist`
+is honored by both sanitize mode and `--audit-only`.
 
 ## Limitations
 
