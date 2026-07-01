@@ -53,6 +53,34 @@ func TestSanitizeEndToEnd(t *testing.T) {
 	}
 }
 
+func TestSanitizeSingleFileInput(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "connecting to db-prod-01.acme.internal as user=jdoe\n")
+
+	opts := Options{
+		InputDir:     filepath.Join(inputDir, "app.log"),
+		OutputDir:    outputDir,
+		AuditEnabled: true,
+		ToolVersion:  "test",
+	}
+	result, err := Sanitize(opts)
+	if err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	if result.FilesProcessed != 1 {
+		t.Errorf("FilesProcessed = %d, want 1", result.FilesProcessed)
+	}
+
+	sanitized, err := os.ReadFile(filepath.Join(outputDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading sanitized output: %v", err)
+	}
+	if string(sanitized) != "connecting to HOST_001 as user=USER_001\n" {
+		t.Errorf("sanitized content = %q", sanitized)
+	}
+}
+
 func TestSanitizeDryRunWritesNothing(t *testing.T) {
 	inputDir := t.TempDir()
 	outputDir := t.TempDir()

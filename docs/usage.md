@@ -4,11 +4,12 @@
 
 ```sh
 sas-log-sanitize -i /path/to/log-bundle -o /path/to/output
+sas-log-sanitize -i /path/to/single.log -o /path/to/output
 ```
 
-Walks `input` recursively, alphabetically by path (this matters: token
-numbering depends on file processing order being deterministic). For each
-file:
+`input` may be a directory (walked recursively, alphabetically by path --
+this matters: token numbering depends on file processing order being
+deterministic) or a single file. For each file:
 
 1. Skipped if its extension is in the binary-extension allowlist, or if its
    content looks binary (>30% non-printable bytes in the first 512 bytes).
