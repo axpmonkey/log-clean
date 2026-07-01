@@ -1,6 +1,27 @@
 package detect
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
+
+func TestIPv4DetectorSkipRanges(t *testing.T) {
+	ranges := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("192.168.0.0/16"),
+	}
+	d := NewIPv4Detector(ranges)
+
+	// 10.x and 192.168.x are skipped; a public IP is still tokenized.
+	line := "peers 10.20.30.40 192.168.1.5 8.8.8.8 done"
+	matches := d.Detect(line)
+	if len(matches) != 1 {
+		t.Fatalf("got %d matches, want 1 (only the public IP): %+v", len(matches), matches)
+	}
+	if matches[0].Value != "8.8.8.8" {
+		t.Errorf("tokenized %q, want 8.8.8.8", matches[0].Value)
+	}
+}
 
 func TestIPv4Detector(t *testing.T) {
 	cases := []struct {

@@ -20,6 +20,13 @@ type Options struct {
 	// vendor domain). See detect.LoadIgnoreList for format. This is the
 	// inverse of HostlistPath, which forces tokenization.
 	IgnorelistPath string
+	// IPv4SkipRanges are CIDR blocks (e.g. "10.0.0.0/8") whose addresses are
+	// left untokenized, from the config's detectors.ipv4.skip_ranges. Invalid
+	// CIDRs are a config error.
+	IPv4SkipRanges []string
+	// AllowlistCaseInsensitive makes the hostname allowlist (HostlistPath)
+	// match regardless of case, from detectors.allowlist.case_insensitive.
+	AllowlistCaseInsensitive bool
 	// Profiles selects which built-in profiles' extra_internal_tlds get
 	// merged into the FQDN detector. ["auto"] (the default) merges every
 	// built-in profile's extras for the whole run -- per-file profile

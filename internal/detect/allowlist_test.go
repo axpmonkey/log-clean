@@ -101,7 +101,7 @@ func TestAllowlistDetector(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := NewAllowlistDetector(c.hosts)
+			d := NewAllowlistDetector(c.hosts, false)
 			matches := d.Detect(c.input)
 			expectSubstringMatches(t, matches, c.input, c.want, "HOST")
 		})
@@ -113,7 +113,7 @@ func TestAllowlistDetectorMultipleHostsOrderIndependent(t *testing.T) {
 	// longest-first sort doesn't guarantee which is tried first; this test
 	// checks both are found without depending on that order (unlike
 	// expectSubstringMatches, which assumes line-position order).
-	d := NewAllowlistDetector([]string{"hostA", "hostB"})
+	d := NewAllowlistDetector([]string{"hostA", "hostB"}, false)
 	matches := d.Detect("from hostA to hostB")
 	if len(matches) != 2 {
 		t.Fatalf("got %d matches, want 2: %+v", len(matches), matches)
@@ -130,12 +130,36 @@ func TestAllowlistDetectorMultipleHostsOrderIndependent(t *testing.T) {
 	}
 }
 
+func TestAllowlistDetectorCaseInsensitive(t *testing.T) {
+	d := NewAllowlistDetector([]string{"db-prod-01"}, true)
+	line := "seen DB-PROD-01 and db-prod-01 today"
+	matches := d.Detect(line)
+	if len(matches) != 2 {
+		t.Fatalf("got %d matches, want 2 (both cases): %+v", len(matches), matches)
+	}
+	// The tokenized Value is the exact text from the line, so a reverse
+	// round-trip restores original casing rather than the allowlist entry's.
+	if matches[0].Value != "DB-PROD-01" {
+		t.Errorf("match 0 Value = %q, want the exact cased text DB-PROD-01", matches[0].Value)
+	}
+	if matches[1].Value != "db-prod-01" {
+		t.Errorf("match 1 Value = %q, want db-prod-01", matches[1].Value)
+	}
+}
+
+func TestAllowlistDetectorCaseSensitiveByDefault(t *testing.T) {
+	d := NewAllowlistDetector([]string{"db-prod-01"}, false)
+	if matches := d.Detect("seen DB-PROD-01 today"); len(matches) != 0 {
+		t.Errorf("case-sensitive detector matched a differently-cased host: %+v", matches)
+	}
+}
+
 func TestAllowlistDetectorLongestMatchFirst(t *testing.T) {
 	// "db-prod-01" is a substring of "db-prod-01-archive"; longest-first
 	// ordering means the longer entry should claim the span (per the
 	// pipeline's first-come overlap rule), leaving the shorter entry's
 	// candidate for that same text unclaimed.
-	d := NewAllowlistDetector([]string{"db-prod-01", "db-prod-01-archive"})
+	d := NewAllowlistDetector([]string{"db-prod-01", "db-prod-01-archive"}, false)
 	line := "backing up db-prod-01-archive now"
 
 	accepted := resolveOverlaps(d.Detect(line))

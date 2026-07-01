@@ -286,24 +286,122 @@ func TestSanitizeUnterminatedPEMKeyFailsClosed(t *testing.T) {
 	}
 }
 
-func TestSanitizeHasHighFindingsReflectsAuditResult(t *testing.T) {
-	// Credentials inside a JDBC URL with a bare (non-dotted) host leak per
-	// the documented limitation in detect.CredentialsDetector -- this should
-	// still produce a working result with HasHighFindings observable, not an
-	// error.
+func TestSanitizeIPv4SkipRangesLeavesAddressesAndNoAuditFinding(t *testing.T) {
+	// Addresses in a configured skip range are left untokenized, and the
+	// audit pass must not then flag them as unredacted-ipv4 (High) -- the
+	// scanner shares the skip ranges with the detector.
 	inputDir := t.TempDir()
 	outputDir := t.TempDir()
-	writeTestFile(t, inputDir, "app.log", "jdbc:postgresql://jdoe:Secret1@dbprod01:5432/sasdb\n")
+	writeTestFile(t, inputDir, "app.log", "internal 10.20.30.40 talking to public 8.8.8.8\n")
+
+	opts := Options{
+		InputDir: inputDir, OutputDir: outputDir, AuditEnabled: true,
+		IPv4SkipRanges: []string{"10.0.0.0/8"}, ToolVersion: "test",
+	}
+	result, err := Sanitize(opts)
+	if err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	out := string(got)
+	if !strings.Contains(out, "10.20.30.40") {
+		t.Errorf("skipped IP should pass through untouched: %q", out)
+	}
+	if strings.Contains(out, "8.8.8.8") {
+		t.Errorf("non-skipped public IP should be tokenized: %q", out)
+	}
+	for _, f := range result.AuditFindings {
+		if f.Pattern == "unredacted-ipv4" {
+			t.Errorf("skipped IP wrongly flagged by audit: %+v", f)
+		}
+	}
+}
+
+func TestSanitizeInvalidSkipRangeIsConfigError(t *testing.T) {
+	inputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "hello\n")
+	opts := Options{InputDir: inputDir, OutputDir: t.TempDir(), IPv4SkipRanges: []string{"not-a-cidr"}, ToolVersion: "test"}
+	_, err := Sanitize(opts)
+	var sanitizeErr *Error
+	if !errors.As(err, &sanitizeErr) || sanitizeErr.Kind != KindConfig {
+		t.Fatalf("expected KindConfig error for bad CIDR, got %v", err)
+	}
+}
+
+func TestSanitizeAllowlistCaseInsensitive(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "archiving to /var/log/DB-PROD-01-archive/out.log\n")
+
+	hostlistPath := filepath.Join(t.TempDir(), "hosts.txt")
+	if err := os.WriteFile(hostlistPath, []byte("db-prod-01\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	opts := Options{
+		InputDir: inputDir, OutputDir: outputDir, HostlistPath: hostlistPath,
+		AllowlistCaseInsensitive: true, ToolVersion: "test",
+	}
+	if _, err := Sanitize(opts); err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	out := string(got)
+	if strings.Contains(out, "DB-PROD-01") {
+		t.Errorf("case-insensitive allowlist should have tokenized DB-PROD-01: %q", out)
+	}
+	if !strings.Contains(out, "HOST_001") {
+		t.Errorf("expected HOST_001 token: %q", out)
+	}
+}
+
+func TestSanitizeAuditFindingsAreReported(t *testing.T) {
+	// A bare, environment-suffixed hostname-shaped word ("app-prod01") isn't
+	// caught by any detector (no dot, not an IP, not a user= form), so it
+	// survives into the output where the audit pass's hostname-shaped-bare-word
+	// rule flags it. This exercises the audit -> Result wiring.
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "starting worker on app-prod01 now\n")
 
 	opts := Options{InputDir: inputDir, OutputDir: outputDir, AuditEnabled: true, ToolVersion: "test"}
 	result, err := Sanitize(opts)
 	if err != nil {
 		t.Fatalf("Sanitize: %v", err)
 	}
-	// This specific bare-host case is Medium severity (hostname/server-suffix
-	// rules), not High, so just confirm the field is populated and findings
-	// exist rather than asserting a specific severity here.
 	if len(result.AuditFindings) == 0 {
-		t.Error("expected at least one audit finding for the bare untokenized host")
+		t.Error("expected at least one audit finding for the residual bare hostname-shaped word")
+	}
+}
+
+func TestSanitizeJDBCBareHostNoLongerLeaks(t *testing.T) {
+	// The bare host in a JDBC connection string with embedded credentials is
+	// now tokenized (previously a documented leak). End-to-end confirmation.
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	writeTestFile(t, inputDir, "app.log", "jdbc:postgresql://jdoe:Secret1@dbprod01:5432/sasdb\n")
+
+	opts := Options{InputDir: inputDir, OutputDir: outputDir, AuditEnabled: true, ToolVersion: "test"}
+	if _, err := Sanitize(opts); err != nil {
+		t.Fatalf("Sanitize: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(outputDir, "app.log"))
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	out := string(got)
+	for _, leak := range []string{"dbprod01", "Secret1"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("%q leaked into output: %q", leak, out)
+		}
+	}
+	if !strings.Contains(out, "HOST_001") {
+		t.Errorf("bare JDBC host not tokenized: %q", out)
 	}
 }

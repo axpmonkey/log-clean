@@ -26,10 +26,6 @@ fixed order defined by `pipeline.DefaultDetectorChain`.
 
 ## Known limitations (see also README)
 
-- JDBC/ActiveMQ credentials + a bare hostname can leave the hostname
-  untokenized (the URL detector's whole-match candidate gets discarded by
-  the partial-overlap rule; a dotted hostname self-heals via the FQDN
-  detector re-scanning independently, a bare one doesn't).
 - Kerberos principals with a dotted, uppercase realm are usually classified
   as `EMAIL` rather than `KRB` (still safely tokenized, just a different
   category).

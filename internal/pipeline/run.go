@@ -117,6 +117,7 @@ func Run(p *Pipeline, opts RunOptions, log *runlog.Logger) (RunResult, error) {
 	// Pass 2: re-read each file, replace tokens, write output, and audit.
 	scanner := audit.NewScanner()
 	scanner.Ignore = p.Ignore
+	scanner.IPv4SkipRanges = p.IPv4SkipRanges
 	var findings []audit.Finding
 	for _, path := range paths {
 		rel, err := relFor(opts.InputDir, path, singleFile)

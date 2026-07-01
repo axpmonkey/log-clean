@@ -12,7 +12,7 @@ import (
 // around the real production chain builder (DefaultDetectorChain), so test
 // coverage exercises the same chain Run() actually uses.
 func identityDetectors() []detect.Detector {
-	return DefaultDetectorChain(nil, nil)
+	return DefaultDetectorChain(ChainOptions{})
 }
 
 func TestIdentityDetectorsEndToEnd(t *testing.T) {
@@ -112,15 +112,12 @@ func TestJDBCEmbeddedCredentialsHostSelfHeals(t *testing.T) {
 	}
 }
 
-// TestJDBCEmbeddedCredentialsBareHostLeaks demonstrates the narrower gap
-// that genuinely remains: a bare, non-dotted hostname (no TLD) inside a
-// JDBC connection string with embedded credentials matches neither FQDN
-// (requires a dot) nor IPv4, so it is left as plain, untokenized text. This
-// is the case the audit pass's hostname-shaped-bare-word rule exists to
-// catch. If a future change (e.g. Milestone 5's cross-detector consistency
-// work) fixes this, this test will fail and the documented limitation in
-// detect.CredentialsDetector should be updated.
-func TestJDBCEmbeddedCredentialsBareHostLeaks(t *testing.T) {
+// TestJDBCEmbeddedCredentialsBareHostTokenized covers what used to be a
+// documented leak: a bare, non-dotted hostname inside a JDBC connection
+// string with embedded credentials matches neither the FQDN detector (needs
+// a dot) nor IPv4, so it once passed through untokenized. jdbcLikeCreds now
+// tokenizes that bare host directly as HOST_NNN.
+func TestJDBCEmbeddedCredentialsBareHostTokenized(t *testing.T) {
 	p := New(identityDetectors())
 	line := "jdbc:postgresql://jdoe:Secret1@dbprod01:5432/sasdb"
 
@@ -130,9 +127,10 @@ func TestJDBCEmbeddedCredentialsBareHostLeaks(t *testing.T) {
 	if strings.Contains(got, "Secret1") {
 		t.Errorf("password leaked into output: %q", got)
 	}
-	if !strings.Contains(got, "dbprod01") {
-		t.Errorf("expected documented limitation (bare host left untokenized) not reproduced, output = %q -- "+
-			"if this now fails because the host IS tokenized, update detect.CredentialsDetector's doc comment "+
-			"and this test, the limitation has been fixed", got)
+	if strings.Contains(got, "dbprod01") {
+		t.Errorf("bare host should now be tokenized, but leaked: %q", got)
+	}
+	if !strings.Contains(got, "HOST_001") {
+		t.Errorf("bare host not tokenized as HOST_001: %q", got)
 	}
 }

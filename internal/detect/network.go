@@ -36,11 +36,25 @@ func LooksLikeVersionString(line string, start int) bool {
 	return ipv4VersionContext.MatchString(line[ctxStart:start])
 }
 
-type IPv4Detector struct{}
+// IPv4Detector tokenizes dotted-quad IPv4 addresses. Its zero value is
+// valid (skips nothing); NewIPv4Detector attaches skip ranges from the
+// config's detectors.ipv4.skip_ranges.
+type IPv4Detector struct {
+	// skipRanges are CIDR blocks whose addresses are deliberately left
+	// untokenized (e.g. non-sensitive internal ranges). Nil means skip
+	// nothing.
+	skipRanges []netip.Prefix
+}
+
+// NewIPv4Detector returns an IPv4Detector that leaves any address falling in
+// one of skipRanges untokenized.
+func NewIPv4Detector(skipRanges []netip.Prefix) IPv4Detector {
+	return IPv4Detector{skipRanges: skipRanges}
+}
 
 func (IPv4Detector) Name() string { return "ipv4" }
 
-func (IPv4Detector) Detect(line string) []Match {
+func (d IPv4Detector) Detect(line string) []Match {
 	locs := ipv4Pattern.FindAllStringIndex(line, -1)
 	if locs == nil {
 		return nil
@@ -51,6 +65,9 @@ func (IPv4Detector) Detect(line string) []Match {
 		if LooksLikeVersionString(line, start) {
 			continue
 		}
+		if IPInSkipRanges(line[start:end], d.skipRanges) {
+			continue
+		}
 		matches = append(matches, Match{
 			Span:     Span{Start: start, End: end},
 			Value:    line[start:end],
@@ -58,6 +75,28 @@ func (IPv4Detector) Detect(line string) []Match {
 		})
 	}
 	return matches
+}
+
+// IPInSkipRanges reports whether ipStr parses as an address inside one of
+// ranges. Exported so the audit scanner (internal/audit) can apply the same
+// suppression -- without it, an IP the detector intentionally left untokenized
+// (per detectors.ipv4.skip_ranges) would then be flagged by the audit pass's
+// unredacted-ipv4 rule as residual PII, a false positive that would also trip
+// --strict.
+func IPInSkipRanges(ipStr string, ranges []netip.Prefix) bool {
+	if len(ranges) == 0 {
+		return false
+	}
+	addr, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return false
+	}
+	for _, r := range ranges {
+		if r.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- IPv6 ------------------------------------------------------------
