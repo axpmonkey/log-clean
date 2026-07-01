@@ -168,11 +168,6 @@ Be aware of these before relying on this tool for a sensitive bundle:
   the bundle before running.
 - **SAS log line unwrapping is not implemented.** Wrapped/continuation lines
   may cause a residual miss; the audit pass is the backstop, not a guarantee.
-- **Config-file `detectors.fqdn.extra_internal_tlds` is not yet applied.**
-  Extra FQDN TLDs currently come only from the built-in profiles'
-  `extra_internal_tlds`. (`detectors.ipv4.skip_ranges` and
-  `detectors.allowlist.case_insensitive` *are* applied -- see the config
-  section in [`docs/usage.md`](docs/usage.md).)
 - **No AIX support.** Linux, Windows, and macOS only.
 - **No CI/CD pipeline.** Local builds only for now.
 - **No cross-bundle consistency, by design.** Each run gets a fresh token

@@ -3,12 +3,10 @@ package profile
 import "gopkg.in/yaml.v3"
 
 // Config is the optional --config YAML file format, per the plan's
-// configuration file spec. In the "detectors" advanced overrides section,
-// ipv4.skip_ranges and allowlist.case_insensitive are wired into detector
-// behavior (see pkg/sanitize.Sanitize). fqdn.extra_internal_tlds is parsed
-// but not yet consumed from the config file -- extra FQDN TLDs currently
-// come only from the built-in profiles' extra_internal_tlds. See
-// pkg/sanitize/doc.go's scope note.
+// configuration file spec. The "detectors" advanced overrides section is
+// fully wired into detector behavior (see pkg/sanitize.Sanitize):
+// fqdn.extra_internal_tlds (unioned with the active profiles' extras),
+// ipv4.skip_ranges, and allowlist.case_insensitive.
 type Config struct {
 	Output     string   `yaml:"output"`
 	Hostlist   string   `yaml:"hostlist"`

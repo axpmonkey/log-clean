@@ -331,6 +331,46 @@ func TestSanitizeInvalidSkipRangeIsConfigError(t *testing.T) {
 	}
 }
 
+func TestSanitizeConfigExtraInternalTLDs(t *testing.T) {
+	// A host under a custom pseudo-TLD ("acmecorp") isn't a valid FQDN by
+	// default, so it passes through untouched -- until the config's
+	// detectors.fqdn.extra_internal_tlds names that TLD, at which point the
+	// FQDN detector tokenizes it.
+	const line = "connecting to db01.acmecorp now\n"
+
+	t.Run("without extra TLD, untouched", func(t *testing.T) {
+		inputDir, outputDir := t.TempDir(), t.TempDir()
+		writeTestFile(t, inputDir, "app.log", line)
+		if _, err := Sanitize(Options{InputDir: inputDir, OutputDir: outputDir, ToolVersion: "test"}); err != nil {
+			t.Fatalf("Sanitize: %v", err)
+		}
+		got, _ := os.ReadFile(filepath.Join(outputDir, "app.log"))
+		if !strings.Contains(string(got), "db01.acmecorp") {
+			t.Errorf("host under unknown TLD should pass through: %q", got)
+		}
+	})
+
+	t.Run("with extra TLD, tokenized", func(t *testing.T) {
+		inputDir, outputDir := t.TempDir(), t.TempDir()
+		writeTestFile(t, inputDir, "app.log", line)
+		opts := Options{
+			InputDir: inputDir, OutputDir: outputDir,
+			ExtraInternalTLDs: []string{"acmecorp"}, ToolVersion: "test",
+		}
+		if _, err := Sanitize(opts); err != nil {
+			t.Fatalf("Sanitize: %v", err)
+		}
+		got, _ := os.ReadFile(filepath.Join(outputDir, "app.log"))
+		out := string(got)
+		if strings.Contains(out, "db01.acmecorp") {
+			t.Errorf("host under configured extra TLD should be tokenized: %q", out)
+		}
+		if !strings.Contains(out, "HOST_001") {
+			t.Errorf("expected HOST_001 token: %q", out)
+		}
+	})
+}
+
 func TestSanitizeAllowlistCaseInsensitive(t *testing.T) {
 	inputDir := t.TempDir()
 	outputDir := t.TempDir()
