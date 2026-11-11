@@ -8,7 +8,9 @@ import "regexp"
 // secrets are never recorded anywhere, so there is nothing to reverse them
 // to (plan: reversibility property, "modulo redacted secrets, which are not
 // reversible by design").
-var tokenPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]*_[0-9]+\b`)
+//
+// A category may have several parts ("IPV4_PRIV_001" with --ip-class).
+var tokenPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]*(?:_[A-Z][A-Z0-9]*)*_[0-9]+\b`)
 
 // Reverse substitutes every CATEGORY_NNN token found in text with its
 // original value, looked up across all categories in the given mapping

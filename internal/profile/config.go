@@ -21,10 +21,14 @@ type Config struct {
 		} `yaml:"fqdn"`
 		IPv4 struct {
 			SkipRanges []string `yaml:"skip_ranges"`
+			IPClass    bool     `yaml:"ip_class"`
 		} `yaml:"ipv4"`
 		Allowlist struct {
 			CaseInsensitive bool `yaml:"case_insensitive"`
 		} `yaml:"allowlist"`
+		URL struct {
+			Mode string `yaml:"mode"`
+		} `yaml:"url"`
 	} `yaml:"detectors"`
 }
 

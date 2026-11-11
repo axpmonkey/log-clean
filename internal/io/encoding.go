@@ -139,3 +139,23 @@ func EncodeWindows1252(s string) []byte {
 	}
 	return out
 }
+
+// DetectSample decides the encoding of a file with no BOM from a leading
+// sample of it. truncated says the sample stops before end of file.
+//
+// A sample cut off mid-file can end inside a multi-byte UTF-8 character;
+// that incomplete trailing character is ignored, or every valid UTF-8 file
+// longer than the sample would risk being misread as Windows-1252.
+func DetectSample(sample []byte, truncated bool) Encoding {
+	if truncated {
+		for i := len(sample) - 1; i >= 0 && i >= len(sample)-utf8.UTFMax; i-- {
+			if utf8.RuneStart(sample[i]) {
+				if !utf8.FullRune(sample[i:]) {
+					sample = sample[:i]
+				}
+				break
+			}
+		}
+	}
+	return DetectNoBOM(sample)
+}

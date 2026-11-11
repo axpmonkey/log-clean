@@ -1,0 +1,7 @@
+<Resource name="jdbc/SharedServices" password="{SAS002}1D5793390C8F1A4B2D3E4F5A" username="dbmsowner"/>
+oma.password={SAS004}8A1B2C3D4E5F60718293A4B5C6D7E8F9
+Encoded value {SAS003}AABBCCDD11223344 stored for connection
+pw: {AES}Zm9vYmFyYmF6cXV4
+<entry key="cred">{AES256}Zm9vYmFyYmF6cXV4cXV1eA==</entry>
+{sasenc}0123ABCD written
+{SAS005}0011223344556677889900AABBCCDDEEFF

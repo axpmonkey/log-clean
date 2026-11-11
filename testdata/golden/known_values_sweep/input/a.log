@@ -1,0 +1,4 @@
+Reading /home/jdoe/sas/config.properties
+Connected to pghost01.corp.example.com on port 9432
+Proxy to sasmid01.corp.example.com
+Resolved support.example.com for docs

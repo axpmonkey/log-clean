@@ -32,8 +32,11 @@ func main() {
 
 type flags struct {
 	input, output, mapping, hostlist, ignorelist, profiles, config string
-	audit, strict, reverseMode, auditOnly                          bool
-	verbose, quiet, dryRun, noColor                                bool
+	urlMode                                                        string
+	workers, maxExtractMB                                          int
+	audit, strict, reverseMode, auditOnly, allowMappingInOutput    bool
+	keepHARBodies, ipClass                                         bool
+	verbose, quiet, dryRun                                         bool
 	showVersion, showHelp                                          bool
 
 	// Config-file-only detector overrides (no CLI flag): populated by
@@ -48,17 +51,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var f flags
-	fs.StringVar(&f.input, "input", "", "input directory containing logs, or a single log file")
+	fs.StringVar(&f.input, "input", "", "input directory, a single log file, or a .zip/.tar/.tar.gz bundle")
 	fs.StringVar(&f.input, "i", "", "shorthand for --input")
 	fs.StringVar(&f.output, "output", "", "output directory (default: <input>-sanitized)")
 	fs.StringVar(&f.output, "o", "", "shorthand for --output")
-	fs.StringVar(&f.mapping, "mapping", "", "path for mapping file (default: <output>/_mapping.json)")
+	fs.StringVar(&f.mapping, "mapping", "", "path for mapping file (default: <output>.mapping.json, next to the output directory)")
+	fs.BoolVar(&f.allowMappingInOutput, "allow-mapping-in-output", false, "allow --mapping to point inside the output directory")
 	fs.StringVar(&f.mapping, "m", "", "shorthand for --mapping")
 	fs.StringVar(&f.hostlist, "hostlist", "", "path to customer-supplied hostname allowlist")
 	fs.StringVar(&f.ignorelist, "ignorelist", "", "path to hostnames/domains to never redact (supports \"*.domain\" wildcards)")
+	fs.StringVar(&f.urlMode, "url-mode", "host", `"host" tokenizes only a URL's userinfo and host (keeps port/path); "whole" replaces the entire URL`)
+	fs.BoolVar(&f.keepHARBodies, "keep-har-bodies", false, "keep HAR response bodies (scanned) instead of dropping them")
+	fs.BoolVar(&f.ipClass, "ip-class", false, "tokenize IPv4 addresses as IPV4_PRIV_NNN / IPV4_PUB_NNN to keep internal vs external visible")
+	fs.IntVar(&f.maxExtractMB, "max-extract-mb", 20480, "cap on total bytes extracted from .zip/.tar archives, in MB (decompression-bomb guard)")
+	fs.IntVar(&f.workers, "workers", 0, "files processed in parallel per pass (default: one per CPU)")
 	fs.StringVar(&f.profiles, "profiles", "auto", `comma-separated profiles to apply, or "auto"`)
 	fs.BoolVar(&f.audit, "audit", true, "run audit pass after sanitization")
-	fs.BoolVar(&f.strict, "strict", false, "exit non-zero if audit finds High-severity suspicious tokens")
+	fs.BoolVar(&f.strict, "strict", false, "also exit 1 on Medium-severity audit findings (High findings always exit 1)")
 	fs.BoolVar(&f.reverseMode, "reverse", false, "reverse mode: substitute tokens back to original values")
 	fs.BoolVar(&f.auditOnly, "audit-only", false, "audit-only mode: scan an already-sanitized directory")
 	fs.StringVar(&f.config, "config", "", "path to YAML config file")
@@ -67,7 +76,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&f.quiet, "quiet", false, "suppress non-error output")
 	fs.BoolVar(&f.quiet, "q", false, "shorthand for --quiet")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "show what would be replaced, write nothing")
-	fs.BoolVar(&f.noColor, "no-color", false, "disable terminal colors")
 	fs.BoolVar(&f.showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&f.showHelp, "help", false, "show usage")
 
@@ -129,6 +137,12 @@ func applyConfigFile(f *flags, fs *flag.FlagSet, stderr io.Writer) int {
 	f.ipv4SkipRanges = cfg.Detectors.IPv4.SkipRanges
 	f.allowlistCaseInsensitive = cfg.Detectors.Allowlist.CaseInsensitive
 	f.extraInternalTLDs = cfg.Detectors.FQDN.ExtraInternalTLDs
+	if cfg.Detectors.IPv4.IPClass && !explicit["ip-class"] {
+		f.ipClass = true
+	}
+	if cfg.Detectors.URL.Mode != "" && !explicit["url-mode"] {
+		f.urlMode = cfg.Detectors.URL.Mode
+	}
 	if len(cfg.Profiles) > 0 && !explicit["profiles"] {
 		f.profiles = strings.Join(cfg.Profiles, ",")
 	}
@@ -154,6 +168,12 @@ func runSanitize(f *flags, positional []string, stdout, stderr io.Writer) int {
 		InputDir:                 input,
 		OutputDir:                f.output,
 		MappingPath:              f.mapping,
+		AllowMappingInOutput:     f.allowMappingInOutput,
+		URLMode:                  f.urlMode,
+		KeepHARBodies:            f.keepHARBodies,
+		Workers:                  f.workers,
+		MaxExtractBytes:          int64(f.maxExtractMB) << 20,
+		IPClass:                  f.ipClass,
 		HostlistPath:             f.hostlist,
 		IgnorelistPath:           f.ignorelist,
 		IPv4SkipRanges:           f.ipv4SkipRanges,
@@ -167,13 +187,25 @@ func runSanitize(f *flags, positional []string, stdout, stderr io.Writer) int {
 		ToolVersion:              version,
 	}
 
+	if !f.quiet {
+		opts.Progress = stderr
+	}
 	result, err := sanitize.Sanitize(opts)
 	if err != nil {
 		return reportError(err, stderr)
 	}
+	for _, w := range result.HostlistWarnings {
+		fmt.Fprintf(stderr, "sas-log-sanitize: hostlist: %s\n", w)
+	}
 
 	if !f.quiet {
 		fmt.Fprintf(stdout, "Processed %d files (%d skipped), %d bytes\n", result.FilesProcessed, len(result.FilesSkipped), result.BytesProcessed)
+		if len(result.FilesSkipped) > 0 {
+			fmt.Fprintln(stdout, "Skipped files:")
+			for _, s := range result.FilesSkipped {
+				fmt.Fprintf(stdout, "  %s: %s\n", s.RelPath, s.Reason)
+			}
+		}
 		if !f.dryRun {
 			fmt.Fprintf(stdout, "Output: %s\n", result.OutputDir)
 			fmt.Fprintf(stdout, "Mapping: %s\n", result.MappingPath)
@@ -183,14 +215,9 @@ func runSanitize(f *flags, positional []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if f.strict && result.HasHighFindings {
-		fmt.Fprintln(stderr, "sas-log-sanitize: --strict mode: High-severity audit findings present")
-		return exitFindingsWarning
-	}
-	if len(result.AuditFindings) > 0 {
-		return exitFindingsWarning
-	}
-	return exitOK
+	code := result.ExitStatus()
+	reportExitReason(code, result.AuditFindings, f.strict, stderr)
+	return code
 }
 
 func runReverse(f *flags, positional []string, stdout, stderr io.Writer) int {
@@ -228,20 +255,27 @@ func runAuditOnly(f *flags, positional []string, stdout, stderr io.Writer) int {
 		return exitConfigError
 	}
 
-	findings, err := sanitize.AuditDirectory(dir, f.ignorelist, f.ipv4SkipRanges)
+	findings, err := sanitize.AuditDirectory(dir, f.ignorelist, f.ipv4SkipRanges, f.mapping)
 	if err != nil {
 		return reportError(err, stderr)
 	}
 
 	fmt.Fprint(stdout, audit.Report(findings))
-	if f.strict && audit.HasHigh(findings) {
-		fmt.Fprintln(stderr, "sas-log-sanitize: --strict mode: High-severity audit findings present")
-		return exitFindingsWarning
+	code := sanitize.ExitStatusFor(findings, f.strict)
+	reportExitReason(code, findings, f.strict, stderr)
+	return code
+}
+
+// reportExitReason explains a non-zero findings exit on stderr.
+func reportExitReason(code int, findings []audit.Finding, strict bool, stderr io.Writer) {
+	if code == exitOK {
+		return
 	}
-	if len(findings) > 0 {
-		return exitFindingsWarning
+	if audit.HasHigh(findings) {
+		fmt.Fprintln(stderr, "sas-log-sanitize: High-severity audit findings present")
+	} else if strict {
+		fmt.Fprintln(stderr, "sas-log-sanitize: --strict mode: audit findings present")
 	}
-	return exitOK
 }
 
 func reportError(err error, stderr io.Writer) int {

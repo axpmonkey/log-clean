@@ -1,0 +1,15 @@
+Authorization: Basic c2FzZGVtbzpQYXNzd29yZDE=
+Proxy-Authorization: Negotiate YIIGhgYGKwYBBQUCoIIGejCCBnag
+authorization: NTLM TlRMTVNTUAABAAAAB4IIog==
+Authorization: Digest username="sasdemo", realm="SAS", nonce="dcd98b7102dd2f0e", response="6629fae49393a05397450978507c4ef1"
+Authorization: Bearer abc123.token-value_here
+Authorization: c2FzZGVtbzpQYXNzd29yZDE=
+{"name":"Authorization","value":"Basic c2FzZGVtbzpQYXNzd29yZDE="}
+{"name": "Proxy-Authorization", "value": "Negotiate YIIGhgYGKwYBBQUCoIIGejCCBnag"}
+"headers": {"Authorization": "Basic c2FzZGVtbzpQYXNzd29yZDE=", "Accept": "*/*"}
+Set-Cookie: JSESSIONID=8F3A2B1C9D0E7F6A5B4C3D2E1F0A9B8C; Path=/SASLogon; Secure; HttpOnly
+Cookie: JSESSIONID=8F3A2B1C9D0E7F6A5B4C3D2E1F0A9B8C; XSRF-TOKEN=6c1f0e2dab; sas-ui-lang=en
+{"name":"Cookie","value":"JSESSIONID=8F3A2B1C9D0E7F6A5B4C3D2E1F0A9B8C; SASLogon_session=ab12cd34"}
+{"name": "Set-Cookie", "value": "SASLogon_session=ab12cd34; Path=/; HttpOnly"}
+GET /SASDrive/;jsessionid=8F3A2B1C9D0E7F6A5B4C3D2E1F0A9B8C?x=1 HTTP/1.1
+session restored with JSESSIONID=8F3A2B1C9D0E7F6A5B4C3D2E1F0A9B8C for request

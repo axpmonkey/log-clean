@@ -44,7 +44,8 @@ type Finding struct {
 // tokenShapePattern matches the sanitizer's own token format (CATEGORY_NNN).
 // Used by the path-with-username rules to tell "the username here is
 // already USER_NNN, nothing to flag" apart from "a real username leaked".
-var tokenShapePattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*_\d+$`)
+// A category may have several parts ("IPV4_PRIV_001" with --ip-class).
+var tokenShapePattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*(?:_[A-Z][A-Z0-9]*)*_\d+$`)
 
 // tokenSuffixPattern matches the "_NNN" tail of our own token format. Some
 // category names end in a digit (IPV4, IPV6), so a broad word-shape rule
@@ -52,10 +53,31 @@ var tokenShapePattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*_\d+$`)
 // "IPV4_001" token and flag it as suspicious -- a false positive caused by
 // our own naming scheme, not residual PII. suppressOwnTokenFragment treats
 // any match immediately followed by "_NNN" as part of one of our tokens.
-var tokenSuffixPattern = regexp.MustCompile(`^_\d+\b`)
+// It also covers the rest of a multi-part category ("_PRIV_001" after
+// "IPV4" in IPV4_PRIV_001).
+var tokenSuffixPattern = regexp.MustCompile(`^(?:_[A-Z][A-Z0-9]*)*_\d+\b`)
 
 func suppressOwnTokenFragment(line string, start, end int) bool {
 	return tokenSuffixPattern.MatchString(line[end:])
+}
+
+// httpdMessageIDPattern matches Apache httpd message IDs ("AH01102").
+var httpdMessageIDPattern = regexp.MustCompile(`^AH\d{5}$`)
+
+// javaBuildSuffixPattern matches a Java build suffix ("b10" in
+// "1.8.0_292-b10").
+var javaBuildSuffixPattern = regexp.MustCompile(`^b\d+$`)
+
+// isKnownNonPIIWord reports whether a letters-then-digits word is known log
+// vocabulary rather than a hostname: an httpd message ID, or a Java build
+// suffix right after "<digit>-".
+func isKnownNonPIIWord(line string, start, end int) bool {
+	w := line[start:end]
+	if httpdMessageIDPattern.MatchString(w) {
+		return true
+	}
+	return javaBuildSuffixPattern.MatchString(w) && start >= 2 && line[start-1] == '-' &&
+		line[start-2] >= '0' && line[start-2] <= '9'
 }
 
 type rule struct {
@@ -90,6 +112,12 @@ type Scanner struct {
 	// the unredacted-ipv4 rule must not flag them as residual PII. Nil when no
 	// skip ranges are configured.
 	IPv4SkipRanges []netip.Prefix
+
+	// Known matches the original values this run (or, in --audit-only mode,
+	// the mapping file) already knows are sensitive. Any of them in the
+	// sanitized output is a High known-original-value finding. Nil when no
+	// mapping is available.
+	Known *detect.KnownValuesDetector
 }
 
 // NewScanner returns a Scanner configured with every rule from the plan's
@@ -105,7 +133,7 @@ func NewScanner() *Scanner {
 		{name: "unredacted-ipv4", severity: SeverityHigh,
 			pattern: regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`),
 			suppress: func(line string, start, end int) bool {
-				return detect.LooksLikeVersionString(line, start) ||
+				return detect.LooksLikeVersionString(line, start, end) ||
 					detect.IPInSkipRanges(line[start:end], s.IPv4SkipRanges)
 			}},
 
@@ -117,6 +145,13 @@ func NewScanner() *Scanner {
 		// output for --strict to be usable.
 		{name: "unredacted-fqdn", severity: SeverityHigh,
 			find: func(line string) [][2]int { return findValidFQDNs(line, s.Ignore) }},
+
+		// Looks for what the run *knows* is sensitive, not just for what
+		// looks like PII: every original value in the mapping (and each
+		// host's short name). Catches leaks no shape rule can, such as a
+		// bare username, and any future detector regression automatically.
+		{name: "known-original-value", severity: SeverityHigh,
+			find: func(line string) [][2]int { return s.Known.FindAll(line) }},
 
 		{name: "email-shape", severity: SeverityHigh,
 			pattern: regexp.MustCompile(`\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b`)},
@@ -139,8 +174,10 @@ func NewScanner() *Scanner {
 		// keeps it from matching "IPV4"/"IPV6" inside our own IPV4_NNN /
 		// IPV6_NNN tokens.
 		{name: "server-suffix-bare-word", severity: SeverityMedium,
-			pattern:  regexp.MustCompile(`(?i)\b[a-z]+[0-9]+(?:-(?:srv|server|host|node|db|web|app|mq))?\b`),
-			suppress: suppressOwnTokenFragment},
+			pattern: regexp.MustCompile(`(?i)\b[a-z]+[0-9]+(?:-(?:srv|server|host|node|db|web|app|mq))?\b`),
+			suppress: func(line string, start, end int) bool {
+				return suppressOwnTokenFragment(line, start, end) || isKnownNonPIIWord(line, start, end)
+			}},
 
 		{name: "long-random-near-credential-keyword", severity: SeverityMedium,
 			find: findLongRandomNearCredentialKeyword},
@@ -221,6 +258,11 @@ func findLongRandomNearCredentialKeyword(line string) [][2]int {
 	var out [][2]int
 	for _, loc := range longAlnumPattern.FindAllStringIndex(line, -1) {
 		start, end := loc[0], loc[1]
+		// A long word that itself contains the keyword is the key's *name*
+		// ("certificateKeystorePassword"), not a random secret.
+		if credentialKeywordPattern.MatchString(line[start:end]) {
+			continue
+		}
 		ctxStart := start - credentialProximityWindow
 		if ctxStart < 0 {
 			ctxStart = 0

@@ -1,6 +1,10 @@
 package pipeline
 
-import "sas-log-sanitize/internal/detect"
+import (
+	"strings"
+
+	"sas-log-sanitize/internal/detect"
+)
 
 // ScanLine runs Pass 1 over a single line: every accepted, pseudonymizable
 // match is registered in the token registry. Redacted (secret) matches and
@@ -13,6 +17,14 @@ func (p *Pipeline) ScanLine(line string) {
 		}
 		p.Registry.TokenFor(m.Category, m.Value)
 		registerEmbeddedHost(p, m)
+	}
+}
+
+// ScanText runs ScanLine over each line of a possibly multi-line string
+// (e.g. a HAR value).
+func (p *Pipeline) ScanText(s string) {
+	for _, line := range strings.Split(s, "\n") {
+		p.ScanLine(line)
 	}
 }
 

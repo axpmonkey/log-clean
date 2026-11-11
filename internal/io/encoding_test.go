@@ -1,6 +1,9 @@
 package io
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestDetectBOM(t *testing.T) {
 	cases := []struct {
@@ -65,5 +68,19 @@ func TestWindows1252RoundTrip(t *testing.T) {
 	reEncoded := EncodeWindows1252(decoded)
 	if string(reEncoded) != string(raw) {
 		t.Errorf("EncodeWindows1252 round trip = %v, want %v", reEncoded, raw)
+	}
+}
+
+// P1.3: encoding is detected from a leading sample when streaming. A
+// multi-byte UTF-8 character cut off at the sample boundary must not make a
+// valid UTF-8 file look like Windows-1252.
+func TestDetectSampleIgnoresTruncatedTrailingRune(t *testing.T) {
+	data := append(bytes.Repeat([]byte("a"), 10), []byte("é")...) // é = C3 A9
+	sample := data[:len(data)-1]                                  // cut inside é
+	if got := DetectSample(sample, true); got != UTF8 {
+		t.Errorf("truncated sample: got %v, want UTF8", got)
+	}
+	if got := DetectSample([]byte("caf\xe9 au lait"), false); got != Windows1252 {
+		t.Errorf("Windows-1252 sample: got %v, want Windows1252", got)
 	}
 }

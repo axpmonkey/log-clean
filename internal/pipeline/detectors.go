@@ -22,7 +22,20 @@ type ChainOptions struct {
 	// IPv4SkipRanges are CIDR blocks whose addresses are left untokenized
 	// (detectors.ipv4.skip_ranges).
 	IPv4SkipRanges []netip.Prefix
+	// IPClass makes the IPv4 detector emit IPV4_PRIV / IPV4_PUB tokens.
+	IPClass bool
+	// URLMode is URLModeHost (default, also for "") or URLModeWhole.
+	URLMode string
 }
+
+// URL tokenization modes (--url-mode).
+const (
+	// URLModeHost tokenizes only a URL's userinfo and host, keeping scheme,
+	// port, path and parameter names. The default.
+	URLModeHost = "host"
+	// URLModeWhole replaces each URL with a single URL_NNN token.
+	URLModeWhole = "whole"
+)
 
 // DefaultDetectorChain builds the full detector chain in plan Decision 4
 // order: UUID claim-only detector first, credentials/secrets (full
@@ -30,15 +43,17 @@ type ChainOptions struct {
 // hostname allowlist substring pass running last. This is the chain real
 // runs (via Run) should use.
 func DefaultDetectorChain(opts ChainOptions) []detect.Detector {
+	ipv4 := detect.NewIPv4Detector(opts.IPv4SkipRanges)
+	ipv4.Classify = opts.IPClass
 	chain := []detect.Detector{
 		detect.UUIDDetector{},
 		detect.CredentialsDetector{},
 		detect.SecretsDetector{},
 		detect.DNDetector{},
 		detect.EmailDetector{},
-		detect.URLDetector{},
+		detect.URLDetector{HostOnly: opts.URLMode != URLModeWhole},
 		detect.NewFQDNDetectorWithExtraTLDs(opts.ExtraTLDs),
-		detect.NewIPv4Detector(opts.IPv4SkipRanges),
+		ipv4,
 		detect.IPv6Detector{},
 		detect.MACDetector{},
 		detect.UNCDetector{},

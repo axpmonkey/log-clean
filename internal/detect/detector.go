@@ -28,6 +28,13 @@ type Match struct {
 // consult LineState themselves -- the pipeline applies span-claiming
 // centrally, in detector-list order, so the overlap rule has exactly one
 // implementation (see LineState.IsProtected) rather than one per detector.
+// Prefilter is an optional fast check a Detector may implement: when
+// MightMatch returns false the pipeline skips Detect for that line. It must
+// be conservative -- false only when Detect would certainly find nothing.
+type Prefilter interface {
+	MightMatch(line string) bool
+}
+
 type Detector interface {
 	// Name identifies the detector for runlog/audit output.
 	Name() string

@@ -1,0 +1,5 @@
+user jdoe logged in from workstation
+host=pghost01 port=9432 dbname=SharedServices
+[error] proxy: AH00957: HTTP: attempt to connect to SASMID01 failed
+backup job for pghost01-archive finished
+contact support for help

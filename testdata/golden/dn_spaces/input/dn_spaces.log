@@ -1,0 +1,5 @@
+LDAP bind as CN=John Doe,OU=Users,DC=corp,DC=example,DC=com succeeded
+member: CN=Jane Q. Smith,OU=Admins,DC=corp,DC=example,DC=com
+Group lookup for "CN=Mary-Ann O'Brien,OU=Users,DC=corp,DC=example,DC=com" ok
+user (CN=Doe\, John,OU=Users,DC=corp,DC=example,DC=com) disabled
+bind dn CN=svc-sas,OU=Service Accounts,DC=corp,DC=example,DC=com used

@@ -1,0 +1,15 @@
+Authorization: Basic SECRET_REDACTED
+Proxy-Authorization: Negotiate SECRET_REDACTED
+authorization: NTLM SECRET_REDACTED
+Authorization: Digest SECRET_REDACTED
+Authorization: Bearer SECRET_REDACTED
+Authorization: SECRET_REDACTED
+{"name":"Authorization","value":"Basic SECRET_REDACTED"}
+{"name": "Proxy-Authorization", "value": "Negotiate SECRET_REDACTED"}
+"headers": {"Authorization": "Basic SECRET_REDACTED", "Accept": "*/*"}
+Set-Cookie: JSESSIONID=SECRET_REDACTED; Path=/SASLogon; Secure; HttpOnly
+Cookie: JSESSIONID=SECRET_REDACTED; XSRF-TOKEN=SECRET_REDACTED; sas-ui-lang=SECRET_REDACTED
+{"name":"Cookie","value":"JSESSIONID=SECRET_REDACTED; SASLogon_session=SECRET_REDACTED"}
+{"name": "Set-Cookie", "value": "SASLogon_session=SECRET_REDACTED; Path=/; HttpOnly"}
+GET /SASDrive/;jsessionid=SECRET_REDACTED?x=1 HTTP/1.1
+session restored with JSESSIONID=SECRET_REDACTED for request

@@ -11,11 +11,14 @@ package runlog
 import (
 	"fmt"
 	"io"
+	"sync"
 	"time"
 )
 
 // Logger writes timestamped, leveled events to an underlying writer.
+// It is safe for concurrent use (files are processed in parallel).
 type Logger struct {
+	mu      sync.Mutex
 	w       io.Writer
 	verbose bool
 	now     func() time.Time // overridable for deterministic tests
@@ -28,6 +31,8 @@ func New(w io.Writer, verbose bool) *Logger {
 }
 
 func (l *Logger) write(level, format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	fmt.Fprintf(l.w, "%s [%s] %s\n", l.now().UTC().Format(time.RFC3339), level, fmt.Sprintf(format, args...))
 }
 

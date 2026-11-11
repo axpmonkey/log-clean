@@ -6,13 +6,13 @@ reverse mode to translate that back to the real value, on your own machine,
 using the mapping file from the original run:
 
 ```sh
-sas-log-sanitize --reverse /path/to/output/_mapping.json "the connection from HOST_003 keeps timing out"
+sas-log-sanitize --reverse /path/to/output.mapping.json "the connection from HOST_003 keeps timing out"
 ```
 
 Or point it at a file containing a larger excerpt:
 
 ```sh
-sas-log-sanitize --reverse /path/to/output/_mapping.json /path/to/excerpt.txt
+sas-log-sanitize --reverse /path/to/output.mapping.json /path/to/excerpt.txt
 ```
 
 ## What does and doesn't reverse

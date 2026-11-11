@@ -206,3 +206,56 @@ func TestReportFormatsFindingsAndTally(t *testing.T) {
 		t.Errorf("report tally incorrect: %s", out)
 	}
 }
+
+// P0.1: the audit shares the IPv4 version-string rule, so an IP that merely
+// sits near "SAS" must be reported, not suppressed.
+func TestUnredactedIPv4NearSASIsReported(t *testing.T) {
+	s := NewScanner()
+	for _, line := range []string{
+		"Connecting to SAS server at 10.20.30.40 failed",
+		"SAS Metadata 10.20.30.41:8561 refused",
+		"release 10.20.30.42 is the gateway",
+	} {
+		found := false
+		for _, f := range s.ScanLine("app.log", 1, line) {
+			if f.Pattern == "unredacted-ipv4" && f.Severity == SeverityHigh {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no High unredacted-ipv4 finding for %q", line)
+		}
+	}
+}
+
+// P1.5: known non-PII noise is not reported, while the real findings the
+// same rules exist for still are.
+func TestAuditNoiseSuppressed(t *testing.T) {
+	s := NewScanner()
+	quiet := []string{
+		"[proxy:error] AH01102: error reading status line from remote server HOST_001:8080",
+		"java version 1.8.0_292-b10 (build 25.292-b10)",
+		`<Connector certificateKeystorePassword="SECRET_REDACTED" certificateKeystoreFile="conf/x.jks"/>`,
+	}
+	for _, line := range quiet {
+		for _, f := range s.ScanLine("x.log", 1, line) {
+			t.Errorf("noise reported on %q: %s %q", line, f.Pattern, f.Match)
+		}
+	}
+	loud := map[string]string{
+		"connecting to sasapp01 now":                        "server-suffix-bare-word",
+		"token: a8f3k2m9q7z1x5c4v6b8n0p2 issued":            "long-random-near-credential-keyword",
+		"AH01102: proxy to backend42-srv failed for client": "server-suffix-bare-word",
+	}
+	for line, rule := range loud {
+		found := false
+		for _, f := range s.ScanLine("x.log", 1, line) {
+			if f.Pattern == rule {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s no longer fires on %q", rule, line)
+		}
+	}
+}

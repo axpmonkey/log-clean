@@ -1,0 +1,9 @@
+BalancerMember http://sasmid01.corp.example.com:8080 route=SASServer1_1 timeout=300
+jdbc:postgresql://pghost01.corp.example.com:9432/SharedServices
+https://sasprd03.corp.example.com:8343/SASLogon/login?ticket=ST-12345-abc&service=x
+ProxyPass /SASLogon http://sasmid02:7980/SASLogon
+ldaps://svc-ldap@dc01.corp.example.com:636/OU=Users,DC=corp
+tcp://10.20.30.50:61616?wireFormat.maxInactivityDuration=0
+http://[fe80::1]:8080/health
+http://localhost:8080/manager
+https://SASMID01.corp.example.com:8443/SASDrive/

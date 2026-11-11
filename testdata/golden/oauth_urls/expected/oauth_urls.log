@@ -1,0 +1,9 @@
+redirect to /SASLogon/oauth/authorize?code=SECRET_REDACTED&state=SECRET_REDACTED
+https://HOST_001/SASLogon/login?ticket=SECRET_REDACTED&service=x
+POST /SASLogon/oauth/token grant_type=authorization_code&code=SECRET_REDACTED&client_secret=SECRET_REDACTED&redirect_uri=/SASDrive
+CAS ticket SECRET_REDACTED validated
+callback?access_token=SECRET_REDACTED&id_token=SECRET_REDACTED&refresh_token=SECRET_REDACTED&RelayState=SECRET_REDACTED&SAMLResponse=SECRET_REDACTED
+/SASLogon/saml/SSO?SAMLRequest=SECRET_REDACTED&RelayState=SECRET_REDACTED
+"queryString": [{"name":"code","value":"SECRET_REDACTED"},{"name":"state","value":"SECRET_REDACTED"},{"name":"lang","value":"en"}]
+login form: username=USER_001&password=SECRET_REDACTED&pwd=SECRET_REDACTED
+job state=RUNNING exit code=0

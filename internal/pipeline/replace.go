@@ -5,6 +5,16 @@ import (
 	"strings"
 )
 
+// ReplaceText runs ReplaceLine over each line of a possibly multi-line
+// string (e.g. a HAR value) and rejoins them.
+func (p *Pipeline) ReplaceText(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = p.ReplaceLine(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // ReplaceLine runs Pass 2 over a single line: every accepted match is
 // substituted with its registry token (pseudonymized matches) or
 // "SECRET_REDACTED" (redacted matches). Claim-only matches (Category == "",

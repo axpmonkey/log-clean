@@ -1,0 +1,7 @@
+url=jdbc:oracle:thin:@orahost01:1521:ORCL
+url=jdbc:oracle:thin:@//orahost02.corp.example.com:1521/sassvc
+url=jdbc:oracle:thin:scott/Tiger123@orahost03:1521:ORCL
+url=jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=orahost04)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=sassvc)))
+(ADDRESS = (PROTOCOL = TCP)(HOST = orahost05.corp.example.com)(PORT = 1521))
+url=jdbc:oracle:thin:@10.20.30.60:1521:ORCL
+later: ping orahost01 ok

@@ -1,0 +1,9 @@
+BalancerMember http://HOST_001:8080 route=SASServer1_1 timeout=300
+jdbc:postgresql://HOST_002:9432/SharedServices
+https://HOST_003:8343/SASLogon/login?ticket=SECRET_REDACTED&service=x
+ProxyPass /SASLogon http://HOST_004:7980/SASLogon
+ldaps://EMAIL_001:636/DN_001
+tcp://IPV4_001:61616?wireFormat.maxInactivityDuration=0
+http://[IPV6_001]:8080/health
+http://localhost:8080/manager
+https://HOST_001:8443/SASDrive/

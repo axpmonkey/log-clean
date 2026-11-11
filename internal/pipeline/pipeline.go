@@ -76,6 +76,20 @@ func (p *Pipeline) ReplacementCounts() map[string]int {
 	return out
 }
 
+// EnableKnownValuesSweep appends the known-values sweep (see
+// detect.KnownValuesDetector) as the last detector, built from everything
+// the registry holds now. Run calls it between Pass 1 and Pass 2, once the
+// registry is complete; it must not be called before Pass 1 finishes, or
+// values first seen later in the bundle would be missed. It returns the
+// swept values (nil when there are none).
+func (p *Pipeline) EnableKnownValuesSweep() []detect.KnownValue {
+	values := detect.SweepValues(p.Registry.Values("USER"), p.Registry.Values("HOST"))
+	if d := detect.NewKnownValuesDetector(values); d != nil {
+		p.Detectors = append(p.Detectors, d)
+	}
+	return values
+}
+
 // walk runs every detector over line in detector-list order, accepting only
 // candidates that don't overlap a span already claimed by an earlier
 // detector, and returns the accepted matches in claim order (not
@@ -84,6 +98,9 @@ func (p *Pipeline) walk(line string) []detect.Match {
 	state := detect.NewLineState()
 	var accepted []detect.Match
 	for _, d := range p.Detectors {
+		if pf, ok := d.(detect.Prefilter); ok && !pf.MightMatch(line) {
+			continue
+		}
 		for _, m := range d.Detect(line) {
 			if state.IsProtected(m.Span.Start, m.Span.End) {
 				continue

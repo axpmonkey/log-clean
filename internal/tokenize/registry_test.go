@@ -78,3 +78,30 @@ func TestFormatTokenPaddingGrowsPast999(t *testing.T) {
 		}
 	}
 }
+
+// Hostnames, domains and email addresses are case-insensitive, so values
+// differing only in case share one token; the mapping keeps the spelling
+// first seen. Usernames stay case-sensitive (Unix usernames are).
+func TestCaseInsensitiveCategories(t *testing.T) {
+	r := NewRegistry()
+	a := r.TokenFor("HOST", "SASMID01.corp.example.com")
+	b := r.TokenFor("HOST", "sasmid01.CORP.example.com")
+	if a != b {
+		t.Errorf("HOST tokens differ by case: %s vs %s", a, b)
+	}
+	if tok, ok := r.Lookup("HOST", "sasmid01.corp.example.com"); !ok || tok != a {
+		t.Errorf("Lookup ignores case: got %q %v", tok, ok)
+	}
+	if got := r.Mapping()["HOST"][a]; got != "SASMID01.corp.example.com" {
+		t.Errorf("mapping keeps first spelling: got %q", got)
+	}
+	if r.TokenFor("EMAIL", "J.Doe@Corp.com") != r.TokenFor("EMAIL", "j.doe@corp.com") {
+		t.Error("EMAIL tokens differ by case")
+	}
+	if r.TokenFor("DOMAIN", "ACME") != r.TokenFor("DOMAIN", "acme") {
+		t.Error("DOMAIN tokens differ by case")
+	}
+	if r.TokenFor("USER", "JDoe") == r.TokenFor("USER", "jdoe") {
+		t.Error("USER must stay case-sensitive")
+	}
+}

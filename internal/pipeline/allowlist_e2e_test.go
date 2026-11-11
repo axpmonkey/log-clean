@@ -12,8 +12,11 @@ func fullDetectorChain(allowlist []string) []detect.Detector {
 	return DefaultDetectorChain(ChainOptions{Allowlist: allowlist})
 }
 
+// Whole-URL mode (--url-mode=whole): the embedded host is cross-registered so
+// it shares a token with a standalone occurrence. Host mode is covered by the
+// url_host_only golden fixture.
 func TestURLEmbeddedHostSharesTokenWithStandaloneOccurrence(t *testing.T) {
-	p := New(fullDetectorChain(nil))
+	p := New(DefaultDetectorChain(ChainOptions{URLMode: URLModeWhole}))
 	lines := []string{
 		"jdbc:postgresql://db-prod-01.acme.internal:5432/sasdb connected",
 		"resolved db-prod-01.acme.internal to an address",

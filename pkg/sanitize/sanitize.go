@@ -1,6 +1,7 @@
 package sanitize
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/netip"
@@ -19,14 +20,21 @@ import (
 
 // Result summarizes a completed sanitization run.
 type Result struct {
-	FilesProcessed    int
-	FilesSkipped      []pipeline.SkippedFile
-	BytesProcessed    int64
-	AuditFindings     []audit.Finding
-	HasHighFindings   bool
+	FilesProcessed  int
+	FilesSkipped    []pipeline.SkippedFile
+	BytesProcessed  int64
+	AuditFindings   []audit.Finding
+	HasHighFindings bool
+	// Strict records whether the run was --strict (it changes ExitStatus).
+	Strict            bool
 	MappingPath       string
 	OutputDir         string
 	ReplacementCounts map[string]int
+	// HostlistWarnings are the hostlist parser's warnings. They quote
+	// hostlist entries (real hostnames), so they are returned for the CLI to
+	// print to stderr instead of being written to _runlog.txt, which lives in
+	// the shareable output directory.
+	HostlistWarnings []string
 }
 
 // Sanitize runs a full sanitization pass per opts: discovers files under
@@ -38,6 +46,9 @@ func Sanitize(opts Options) (Result, error) {
 		return Result{}, err
 	}
 	opts = opts.applyDefaults()
+	if err := opts.checkMappingLocation(); err != nil {
+		return Result{}, err
+	}
 
 	// opts.InputDir may name either a directory (a full log bundle) or a
 	// single file -- pipeline.Run's discoverFiles/relPath logic handles
@@ -63,7 +74,7 @@ func Sanitize(opts Options) (Result, error) {
 	log := runlog.New(logWriter, opts.Verbose)
 	log.Info("sas-log-sanitize %s starting: input=%s output=%s dry_run=%v", opts.ToolVersion, opts.InputDir, opts.OutputDir, opts.DryRun)
 
-	allowlist, err := loadAllowlist(opts.HostlistPath, log)
+	allowlist, hostlistWarnings, err := loadAllowlist(opts.HostlistPath, log)
 	if err != nil {
 		return Result{}, err
 	}
@@ -88,17 +99,24 @@ func Sanitize(opts Options) (Result, error) {
 		Allowlist:                allowlist,
 		AllowlistCaseInsensitive: opts.AllowlistCaseInsensitive,
 		IPv4SkipRanges:           skipRanges,
+		URLMode:                  opts.URLMode,
+		IPClass:                  opts.IPClass,
 	})
 	p := pipeline.New(chain)
 	p.Ignore = ignoreList
 	p.IPv4SkipRanges = skipRanges
 
 	runResult, err := pipeline.Run(p, pipeline.RunOptions{
-		InputDir:     opts.InputDir,
-		OutputDir:    opts.OutputDir,
-		AuditEnabled: opts.AuditEnabled,
-		DryRun:       opts.DryRun,
-		ToolVersion:  opts.ToolVersion,
+		InputDir:      opts.InputDir,
+		OutputDir:     opts.OutputDir,
+		AuditEnabled:  opts.AuditEnabled,
+		DryRun:        opts.DryRun,
+		ToolVersion:   opts.ToolVersion,
+		KeepHARBodies: opts.KeepHARBodies,
+		Workers:       opts.Workers,
+		Progress:      opts.Progress,
+
+		MaxExtractBytes: opts.MaxExtractBytes,
 	}, log)
 	if err != nil {
 		log.Error("run failed: %v", err)
@@ -123,6 +141,13 @@ func Sanitize(opts Options) (Result, error) {
 		if err := os.WriteFile(summaryPath, []byte(formatSummary(runResult)), 0o644); err != nil {
 			return Result{}, processingErrorf("writing summary: %w", err)
 		}
+		js, err := summaryJSON(runResult, opts)
+		if err != nil {
+			return Result{}, processingErrorf("encoding summary: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(opts.OutputDir, "_summary.json"), js, 0o644); err != nil {
+			return Result{}, processingErrorf("writing summary: %w", err)
+		}
 	}
 
 	return Result{
@@ -131,30 +156,35 @@ func Sanitize(opts Options) (Result, error) {
 		BytesProcessed:    runResult.BytesProcessed,
 		AuditFindings:     runResult.AuditFindings,
 		HasHighFindings:   hasHigh,
+		Strict:            opts.Strict,
 		MappingPath:       opts.MappingPath,
 		OutputDir:         opts.OutputDir,
 		ReplacementCounts: runResult.ReplacementCounts,
+		HostlistWarnings:  hostlistWarnings,
 	}, nil
 }
 
-func loadAllowlist(hostlistPath string, log *runlog.Logger) ([]string, error) {
+// loadAllowlist parses the hostlist. Its warnings quote entries (real
+// hostnames), so only their count goes to the runlog; the text is returned
+// for the caller to show outside the output directory.
+func loadAllowlist(hostlistPath string, log *runlog.Logger) ([]string, []string, error) {
 	if hostlistPath == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	f, err := os.Open(hostlistPath)
 	if err != nil {
-		return nil, inputErrorf("opening hostlist %s: %w", hostlistPath, err)
+		return nil, nil, inputErrorf("opening hostlist %s: %w", hostlistPath, err)
 	}
 	defer f.Close()
 
 	entries, warnings, err := detect.LoadAllowlist(f)
 	if err != nil {
-		return nil, configErrorf("parsing hostlist %s: %w", hostlistPath, err)
+		return nil, nil, configErrorf("parsing hostlist %s: %w", hostlistPath, err)
 	}
-	for _, w := range warnings {
-		log.Warn("hostlist: %s", w)
+	if len(warnings) > 0 {
+		log.Warn("hostlist: %d warnings (shown on stderr; not logged here because they quote hostlist entries)", len(warnings))
 	}
-	return entries, nil
+	return entries, warnings, nil
 }
 
 func loadIgnoreList(ignorelistPath string) (detect.IgnoreList, error) {
@@ -256,8 +286,99 @@ func profileNames(profiles []profile.Profile) string {
 	return names
 }
 
+// Exit statuses a successful run can end with (errors exit 2-4 and never
+// produce a Result).
+const (
+	ExitClean    = 0 // no High findings (and, with --strict, no findings at all)
+	ExitFindings = 1 // High findings, or any finding with --strict
+)
+
+// ExitStatus is the CLI exit code for this result. The CLI, --audit-only and
+// _summary.json all use the same rule (ExitStatusFor), so they can't
+// disagree.
+func (r Result) ExitStatus() int {
+	return ExitStatusFor(r.AuditFindings, r.Strict)
+}
+
+// ExitStatusFor applies the exit-code rule: High findings exit 1; Medium
+// findings exit 1 only under --strict. Medium rules are deliberately broad
+// (they flag words like "java8"), so letting them fail every run made exit
+// code 1 near-universal and meaningless.
+func ExitStatusFor(findings []audit.Finding, strict bool) int {
+	if audit.HasHigh(findings) || (strict && len(findings) > 0) {
+		return ExitFindings
+	}
+	return ExitClean
+}
+
+// SummarySchemaVersion is the _summary.json schema version.
+const SummarySchemaVersion = 1
+
+// summaryJSON renders _summary.json: the run's counts in machine-readable
+// form for other tools (e.g. sas-casefile build). It holds counts, relative
+// paths and reasons only -- never an original value.
+func summaryJSON(r pipeline.RunResult, opts Options) ([]byte, error) {
+	type skipped struct {
+		Path   string `json:"path"`
+		Reason string `json:"reason"`
+	}
+	type auditCounts struct {
+		Enabled bool `json:"enabled"`
+		High    int  `json:"high"`
+		Medium  int  `json:"medium"`
+	}
+	s := struct {
+		SchemaVersion          int            `json:"schema_version"`
+		ToolVersion            string         `json:"tool_version"`
+		FilesProcessed         int            `json:"files_processed"`
+		FilesSkipped           int            `json:"files_skipped"`
+		BytesProcessed         int64          `json:"bytes_processed"`
+		ReplacementsByCategory map[string]int `json:"replacements_by_category"`
+		UniqueValuesByCategory map[string]int `json:"unique_values_by_category"`
+		SkippedFiles           []skipped      `json:"skipped_files"`
+		Audit                  auditCounts    `json:"audit"`
+		ExitStatus             int            `json:"exit_status"`
+	}{
+		SchemaVersion:          SummarySchemaVersion,
+		ToolVersion:            opts.ToolVersion,
+		FilesProcessed:         r.FilesProcessed,
+		FilesSkipped:           len(r.FilesSkipped),
+		BytesProcessed:         r.BytesProcessed,
+		ReplacementsByCategory: r.ReplacementCounts,
+		UniqueValuesByCategory: map[string]int{},
+		SkippedFiles:           []skipped{},
+		Audit:                  auditCounts{Enabled: opts.AuditEnabled},
+		ExitStatus:             ExitStatusFor(r.AuditFindings, opts.Strict),
+	}
+	for cat, m := range r.Mapping.Categories {
+		s.UniqueValuesByCategory[cat] = len(m)
+	}
+	for _, f := range r.FilesSkipped {
+		s.SkippedFiles = append(s.SkippedFiles, skipped{Path: filepath.ToSlash(f.RelPath), Reason: f.Reason})
+	}
+	for _, f := range r.AuditFindings {
+		if f.Severity == audit.SeverityHigh {
+			s.Audit.High++
+		} else {
+			s.Audit.Medium++
+		}
+	}
+	out, err := json.MarshalIndent(s, "", "  ")
+	return append(out, '\n'), err
+}
+
 func formatSummary(r pipeline.RunResult) string {
-	out := fmt.Sprintf("Files processed: %d\nFiles skipped: %d\nBytes processed: %d\n\nReplacements by category:\n",
+	// Skipped files come first: a skipped file is history the analysis
+	// won't see (a rotated log, an unreadable archive), so it must not be
+	// buried under the counts.
+	out := fmt.Sprintf("Skipped files (%d):\n", len(r.FilesSkipped))
+	if len(r.FilesSkipped) == 0 {
+		out += "  none\n"
+	}
+	for _, s := range r.FilesSkipped {
+		out += fmt.Sprintf("  %s: %s\n", s.RelPath, s.Reason)
+	}
+	out += fmt.Sprintf("\nFiles processed: %d\nFiles skipped: %d\nBytes processed: %d\n\nReplacements by category:\n",
 		r.FilesProcessed, len(r.FilesSkipped), r.BytesProcessed)
 	// Sort categories so the summary is byte-for-byte deterministic across
 	// runs -- ranging over the map directly would emit them in Go's
@@ -269,12 +390,6 @@ func formatSummary(r pipeline.RunResult) string {
 	sort.Strings(cats)
 	for _, cat := range cats {
 		out += fmt.Sprintf("  %s: %d\n", cat, r.ReplacementCounts[cat])
-	}
-	if len(r.FilesSkipped) > 0 {
-		out += "\nSkipped files:\n"
-		for _, s := range r.FilesSkipped {
-			out += fmt.Sprintf("  %s: %s\n", s.RelPath, s.Reason)
-		}
 	}
 	return out
 }

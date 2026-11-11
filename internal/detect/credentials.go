@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"net/netip"
 	"regexp"
 	"strings"
 )
@@ -38,6 +39,24 @@ var (
 	sasMetaPassPattern = regexp.MustCompile(`(?i)OPTIONS\s+[^;]*METAPASS\s*=\s*["']?([^"'\s;]+)`)
 	sasMetaUserPattern = regexp.MustCompile(`(?i)OPTIONS\s+[^;]*METAUSER\s*=\s*["']?([^"'\s;]+)`)
 
+	// sasEncodedPasswordPattern matches SAS-encoded passwords ("{SAS002}...",
+	// "{SAS004}...", "{SASENC}...", "{AES}...", "{AES256}..."). These
+	// encodings are reversible with publicly known methods, so the encoded
+	// form *is* the password: the whole thing, prefix included, is redacted
+	// regardless of what key (if any) precedes it.
+	sasEncodedPasswordPattern = regexp.MustCompile(`(?i)\{(?:SAS00[1-9]|SASENC|AES256|AES)\}[A-Za-z0-9+/=]+`)
+
+	// oracleThinPattern matches Oracle thin JDBC URLs, which have no "://"
+	// and so are invisible to the URL detector:
+	// "jdbc:oracle:thin:@host:1521:SID", "jdbc:oracle:thin:@//host:1521/svc",
+	// "jdbc:oracle:thin:user/password@host:1521:SID". Groups: user,
+	// password, host.
+	oracleThinPattern = regexp.MustCompile(`(?i)jdbc:oracle:thin:(?:([^/@\s:"']+)/([^@\s"']+))?@(?://)?([A-Za-z0-9._-]+)`)
+
+	// tnsHostPattern matches the host in an Oracle TNS descriptor:
+	// "(ADDRESS=(PROTOCOL=TCP)(HOST=orahost01)(PORT=1521))".
+	tnsHostPattern = regexp.MustCompile(`(?i)\(\s*HOST\s*=\s*([^)\s]+)\s*\)`)
+
 	// ldapBindPattern matches an LDAP bind password/pw/pwd assignment.
 	ldapBindPattern = regexp.MustCompile(`(?i)\bbind\s*(?:password|pw|pwd)\s*[:=]\s*["']?([^"'\s]+)`)
 )
@@ -70,20 +89,81 @@ func (CredentialsDetector) Detect(line string) []Match {
 
 	// Order matters here: more specific patterns first, so they claim their
 	// span before the generic catch-all would otherwise also match it.
-	matches = append(matches, redactGroup(line, kvPasswordPattern, 1)...)
-	matches = append(matches, redactGroup(line, kvPwdPattern, 1)...)
-	matches = append(matches, redactGroup(line, kvSecretPattern, 1)...)
-	matches = append(matches, redactGroup(line, kvPassColonPattern, 1)...)
-	matches = append(matches, redactGroup(line, sasMetaPassPattern, 1)...)
-	matches = append(matches, redactGroup(line, ldapBindPattern, 1)...)
-	matches = append(matches, redactGroup(line, genericCredentialKVPattern, 1)...)
+	// HTTP header credentials go first of all: their values are free text,
+	// so a narrower rule claiming a fragment would drop the whole header.
+	//
+	// Each rule is gated on a keyword its pattern requires (checked on an
+	// ASCII-lowercased copy of the line), so most lines skip most regexes:
+	// running all of them on every line was the largest CPU cost in a
+	// profile of a dense bundle. The gates never change what matches.
+	l := asciiLower(line)
+	if strings.Contains(l, "authorization") {
+		matches = append(matches, authorizationValues(line)...)
+	}
+	if strings.Contains(l, "cookie") {
+		matches = append(matches, cookieValues(line)...)
+	}
+	if strings.Contains(l, "x-") {
+		matches = append(matches, redactGroup(line, sensitiveXHeaderPattern, 1)...)
+	}
+	if strings.Contains(l, "jsessionid=") {
+		matches = append(matches, redactGroup(line, jsessionIDPattern, 1)...)
+	}
+	if strings.IndexByte(l, '{') >= 0 {
+		matches = append(matches, redactWhole(line, sasEncodedPasswordPattern)...)
+	}
+	// Per-parameter URL/form values before the key=value rules below, whose
+	// value class doesn't stop at '&' and would swallow every later parameter.
+	matches = append(matches, queryParamSecrets(line, l)...)
+	if strings.Contains(l, "password") {
+		matches = append(matches, redactGroup(line, kvPasswordPattern, 1)...)
+	}
+	if strings.Contains(l, "pwd") {
+		matches = append(matches, redactGroup(line, kvPwdPattern, 1)...)
+	}
+	if strings.Contains(l, "secret") {
+		matches = append(matches, redactGroup(line, kvSecretPattern, 1)...)
+	}
+	if strings.Contains(l, "pass") {
+		matches = append(matches, redactGroup(line, kvPassColonPattern, 1)...)
+	}
+	if strings.Contains(l, "metapass") {
+		matches = append(matches, redactGroup(line, sasMetaPassPattern, 1)...)
+	}
+	if strings.Contains(l, "bind") {
+		matches = append(matches, redactGroup(line, ldapBindPattern, 1)...)
+	}
+	if strings.IndexByte(l, '=') >= 0 && containsAny(l, "pass", "secret", "apikey", "api_key", "token", "credential") {
+		matches = append(matches, redactGroup(line, genericCredentialKVPattern, 1)...)
+	}
 
 	// SAS METAUSER is pseudonymized (it's a username, not a secret), not redacted.
-	matches = append(matches, pseudonymizeGroup(line, sasMetaUserPattern, 1, "USER")...)
+	if strings.Contains(l, "metauser") {
+		matches = append(matches, pseudonymizeGroup(line, sasMetaUserPattern, 1, "USER")...)
+	}
+
+	// Oracle thin URLs and TNS descriptors: user pseudonymized, password
+	// redacted, host tokenized (an IP host is left to the IPv4 detector).
+	if strings.Contains(l, "jdbc:oracle") {
+		for _, loc := range oracleThinPattern.FindAllStringSubmatchIndex(line, -1) {
+			if loc[2] >= 0 {
+				matches = append(matches, Match{Span: Span{Start: loc[2], End: loc[3]}, Value: line[loc[2]:loc[3]], Category: "USER"})
+				matches = append(matches, Match{Span: Span{Start: loc[4], End: loc[5]}, Value: line[loc[4]:loc[5]], Redact: true})
+			}
+			matches = append(matches, hostMatch(line, loc[6], loc[7])...)
+		}
+	}
+	if strings.Contains(l, "host") && strings.IndexByte(l, '(') >= 0 {
+		for _, loc := range tnsHostPattern.FindAllStringSubmatchIndex(line, -1) {
+			matches = append(matches, hostMatch(line, loc[2], loc[3])...)
+		}
+	}
 
 	// JDBC / ActiveMQ embedded credentials: username pseudonymized, password redacted.
-	matches = append(matches, jdbcLikeCreds(line, jdbcCredsPattern)...)
-	matches = append(matches, jdbcLikeCreds(line, activeMQCredsPattern)...)
+	if strings.IndexByte(l, '@') >= 0 && strings.Contains(l, "://") {
+		matches = append(matches, jdbcLikeCreds(line, jdbcCredsPattern)...)
+		matches = append(matches, jdbcLikeCreds(line, activeMQCredsPattern)...)
+	}
 
 	return matches
 }
@@ -165,4 +245,17 @@ func jdbcLikeCreds(line string, pattern *regexp.Regexp) []Match {
 		}
 	}
 	return matches
+}
+
+// hostMatch returns a HOST match for line[s:e], or nothing when it is an IP
+// address (the IPv4/IPv6 detectors categorize those) or localhost.
+func hostMatch(line string, s, e int) []Match {
+	host := line[s:e]
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return nil
+	}
+	return []Match{{Span: Span{Start: s, End: e}, Value: host, Category: "HOST"}}
 }

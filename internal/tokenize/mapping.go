@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -71,4 +72,31 @@ func LoadMappingFile(path string) (MappingFile, error) {
 		return MappingFile{}, fmt.Errorf("parsing mapping file %s: %w", path, err)
 	}
 	return mf, nil
+}
+
+// OrderedValues flattens a category -> token -> value mapping (as in
+// MappingFile.Categories or Registry.Mapping) into category -> values in
+// token order, so callers that build matchers from it are deterministic.
+// Tokens within a category share a prefix and differ only in their
+// zero-padded sequence number, so ordering by (length, text) is numeric.
+func OrderedValues(categories map[string]map[string]string) map[string][]string {
+	out := make(map[string][]string, len(categories))
+	for cat, m := range categories {
+		toks := make([]string, 0, len(m))
+		for tok := range m {
+			toks = append(toks, tok)
+		}
+		sort.Slice(toks, func(i, j int) bool {
+			if len(toks[i]) != len(toks[j]) {
+				return len(toks[i]) < len(toks[j])
+			}
+			return toks[i] < toks[j]
+		})
+		vals := make([]string, len(toks))
+		for i, tok := range toks {
+			vals[i] = m[tok]
+		}
+		out[cat] = vals
+	}
+	return out
 }

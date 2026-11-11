@@ -1,0 +1,7 @@
+<Resource name="jdbc/SharedServices" password="SECRET_REDACTED" username="USER_001"/>
+oma.password=SECRET_REDACTED
+Encoded value SECRET_REDACTED stored for connection
+pw: SECRET_REDACTED
+<entry key="cred">SECRET_REDACTED</entry>
+SECRET_REDACTED written
+SECRET_REDACTED

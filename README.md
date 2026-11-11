@@ -19,11 +19,13 @@ sas-log-sanitize -i /path/to/log-bundle -o /path/to/sanitized-output
 sas-log-sanitize -i /path/to/single.log -o /path/to/sanitized-output
 ```
 
-This walks the input (a directory or a single file), replaces detected
-identifiers with tokens (`HOST_001`, `USER_001`, `IPV4_001`, ...), fully
-redacts credentials and secrets (`SECRET_REDACTED`), and writes the
-sanitized files plus a mapping file, audit report, summary, and runlog to
-the output directory.
+This walks the input (a directory, a single file, or a `.zip`/`.tar`/`.tar.gz`
+bundle), replaces detected identifiers with tokens (`HOST_001`, `USER_001`,
+`IPV4_001`, ...), fully redacts credentials and secrets (`SECRET_REDACTED`),
+and writes the sanitized files plus an audit report (`_audit.txt`), summary
+(`_summary.txt` and `_summary.json`), and runlog (`_runlog.txt`) to the output
+directory. The mapping file goes *next to* the output directory, at
+`<output>.mapping.json`, so the folder you share never contains it.
 
 ## Installation
 
@@ -67,21 +69,31 @@ sas-log-sanitize -i /path/to/log-bundle -o /path/to/output \
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--input` / `-i` | required | Input directory containing logs, or a single log file |
+| `--input` / `-i` | required | Input directory, a single log file, or a `.zip`/`.tar`/`.tar.gz` bundle |
 | `--output` / `-o` | `<input>-sanitized` | Output directory (created if missing) |
-| `--mapping` / `-m` | `<output>/_mapping.json` | Path for the mapping file |
+| `--mapping` / `-m` | `<output>.mapping.json` | Path for the mapping file. Must be outside the output directory (exit 4 otherwise) |
+| `--allow-mapping-in-output` | off | Allow `--mapping` inside the output directory |
 | `--hostlist` | none | Path to a customer-supplied hostname allowlist |
 | `--ignorelist` | none | Path to hostnames/domains to never redact (supports `*.domain` wildcards) |
 | `--profiles` | `auto` | Comma-separated profiles to apply, or `auto` |
 | `--audit` | `true` | Run the audit pass after sanitization |
-| `--strict` | `false` | Print a clear warning and exit 1 if the audit finds High-severity suspicious tokens |
+| `--strict` | `false` | Also exit 1 on Medium-severity audit findings (High findings always exit 1) |
 | `--config` | none | Path to a YAML config file |
 | `--verbose` / `-v` | `false` | Verbose logging to the runlog |
-| `--quiet` / `-q` | `false` | Suppress non-error stdout output |
+| `--quiet` / `-q` | `false` | Suppress non-error output, including progress lines on stderr |
 | `--dry-run` | `false` | Show what would happen, write nothing |
+| `--url-mode` | `host` | `host` replaces only a URL's userinfo and host (keeps scheme, port, path, parameter names); `whole` replaces the entire URL with one `URL_NNN` token |
+| `--keep-har-bodies` | `false` | Keep HAR response bodies (scanned) instead of dropping them |
+| `--ip-class` | `false` | Tokenize IPv4 as `IPV4_PRIV_NNN` / `IPV4_PUB_NNN` so internal vs external stays visible |
+| `--max-extract-mb` | `20480` | Cap on total bytes extracted from `.zip`/`.tar` archives (decompression-bomb guard) |
+| `--workers` | one per CPU | Files (and chunks of large files) processed in parallel; output is identical for any value |
 
-Exit codes: `0` clean, `1` audit found suspicious tokens, `2` input error,
-`3` processing error, `4` configuration error.
+Exit codes: `0` no High audit findings (with `--strict`: no findings at
+all), `1` High-severity audit findings (with `--strict`: any finding), `2`
+input error, `3` processing error, `4` configuration error. Medium findings
+are always listed in `_audit.txt` and counted in `_summary.json`; they only
+fail the run under `--strict`, because the Medium rules are deliberately
+broad (they flag words like `java8`).
 
 ### Reverse mode
 
@@ -89,8 +101,8 @@ Translate tokens in a sanitized excerpt (or file) back to their original
 values, using the mapping file from the original run:
 
 ```sh
-sas-log-sanitize --reverse /path/to/output/_mapping.json "saw HOST_001 fail"
-sas-log-sanitize --reverse /path/to/output/_mapping.json /path/to/excerpt.txt
+sas-log-sanitize --reverse /path/to/output.mapping.json "saw HOST_001 fail"
+sas-log-sanitize --reverse /path/to/output.mapping.json /path/to/excerpt.txt
 ```
 
 `SECRET_REDACTED` is never reversible -- redacted secrets are never recorded
@@ -105,14 +117,24 @@ PII, without re-running sanitization:
 sas-log-sanitize --audit-only /path/to/output --strict
 ```
 
-Pass `--ignorelist` here too if the original run used one, so hostnames it
-intentionally left untouched aren't re-flagged as residual PII.
+Pass `--ignorelist` (and `--config`, for `detectors.ipv4.skip_ranges`) here
+too if the original run used them, so values it intentionally left untouched
+aren't re-flagged as residual PII.
+
+With the run's mapping file (`--mapping`, or found automatically at
+`<dir>.mapping.json`), it also searches for every original value the mapping
+holds; any hit is a High `known-original-value` finding and exits 1.
 
 ## The mapping file
 
-`_mapping.json` is the reverse mapping from tokens back to real values
+The mapping file (default `<output>.mapping.json`, next to the output
+directory) is the reverse mapping from tokens back to real values
 (hostnames, IPs, usernames, emails, etc.). **It is the single most sensitive
 artifact this tool produces** -- treat it like a credential:
+
+- It is written *outside* the output directory, so zipping and attaching the
+  sanitized folder can't ship it. A `--mapping` path inside the output
+  directory is refused (exit 4) unless `--allow-mapping-in-output` is passed.
 
 - It is written with owner-only (`0600`) file permissions.
 - It is per-case and ephemeral by design: delete it (or move it to encrypted
@@ -120,8 +142,12 @@ artifact this tool produces** -- treat it like a credential:
   long-term mapping storage or cross-bundle consistency on purpose.
 - It never contains a password, API key, or other secret -- those are always
   fully redacted (`SECRET_REDACTED`), never tokenized or recorded.
-- The sanitized log output itself, the audit report, the summary, and the
-  runlog are **not** sensitive in the same way and contain no real values.
+- The sanitized log output, the summaries, and the runlog contain no
+  original values. **The audit report (`_audit.txt`) can**: each finding
+  quotes the suspect line, and a `known-original-value` finding names the
+  original value it found. Read it before sharing the output folder, fix or
+  remove what it flags, and leave `_audit.txt` out of what you send if it
+  has findings.
 
 ## The allowlist file
 
@@ -129,7 +155,11 @@ artifact this tool produces** -- treat it like a credential:
 line, comments allowed with `#`. It exists because some hostnames appear
 embedded inside compound strings the other detectors can't reliably parse
 out on their own (e.g. `/var/log/db-prod-01-archive/`), and because bare,
-non-dotted hostnames (no TLD) aren't caught by the FQDN detector at all.
+non-dotted hostnames (no TLD) aren't caught by the FQDN detector. (A short
+name is still replaced when its full name was found elsewhere in the bundle,
+e.g. `pghost01` once `pghost01.corp.example.com` was seen -- the
+known-values sweep -- but a host that only ever appears short needs the
+allowlist.)
 
 The allowlist detector does **literal substring matching**, not word-boundary
 matching -- it's the only detector that works this way. That means a short
@@ -159,8 +189,16 @@ is honored by both sanitize mode and `--audit-only`.
 
 Be aware of these before relying on this tool for a sensitive bundle:
 
-- **No streaming/daemon mode.** On-demand processing only.
-- **No archive support.** Extract `.zip`/`.tar.gz`/etc. bundles before running.
+- **No daemon/watch mode.** On-demand processing only.
+- **Archives are unpacked one level deep.** `.zip`/`.tar`/`.tar.gz` bundles
+  (as the input or inside it) are extracted to a private temporary directory
+  that is deleted when the run ends, capped at 20 GiB in total. Archives
+  inside archives, symlinks, and entries with absolute or `..` paths are
+  skipped and listed in `_summary.txt`. Rotated `*.gz` logs are read and
+  written back gzipped (including `*.har.gz`). Change the cap with
+  `--max-extract-mb`.
+- **Input file names are not sanitized.** Output paths mirror input paths;
+  rename files that contain hostnames or usernames before sharing.
 - **Binary files are skipped, not scrubbed.** Detected by extension
   allowlist and a non-printable-byte-ratio heuristic; binary content
   dominated by high bytes (0x80-0xFF) rather than control characters may not

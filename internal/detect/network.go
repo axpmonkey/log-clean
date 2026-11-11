@@ -13,33 +13,59 @@ import (
 // rather than matching any \d{1,3} and validating afterward.
 var ipv4Pattern = regexp.MustCompile(`\b((?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b`)
 
-// ipv4VersionContext matches the version/product keywords that, when found
-// in the 20 characters preceding a dotted-quad-shaped match, mean it's
-// almost certainly a version string (e.g. "SAS 9.4.1.2", "version 9.4.1.2")
-// rather than a real IP address (plan Decision 6 / IPv4 detector spec).
-var ipv4VersionContext = regexp.MustCompile(`(?i)\b(v|version|release|sas)\b`)
+// ipv4VersionKeyword matches a version/product keyword that is the token
+// *immediately* preceding a dotted-quad-shaped match ("SAS 9.4.8.0",
+// "version 1.2.3.4", "release: 9.4.1.2"). It is anchored to the end of the
+// preceding text on purpose: in SAS logs "SAS" appears almost everywhere, so
+// a keyword merely somewhere nearby ("Connecting to SAS server at
+// 10.20.30.40") says nothing about the number that follows.
+var ipv4VersionKeyword = regexp.MustCompile(`(?i)\b(?:v|version|release|sas)\s*[:=]?\s*$`)
 
-const versionContextWindow = 20
+// ipv4FollowedByPort matches ":<port>" right after a dotted quad. A version
+// string never carries a port; "SAS Metadata 10.20.30.41:8561" is an address.
+var ipv4FollowedByPort = regexp.MustCompile(`^:\d`)
 
-// LooksLikeVersionString reports whether the text immediately preceding a
-// dotted-quad-shaped match at byte offset start in line suggests it's a
-// version number rather than a real IPv4 address. Exported so the audit
-// scanner (internal/audit) can apply the identical suppression rule -- if
-// the audit pass used its own separate heuristic, it would flag the very
-// version strings this detector intentionally chose not to tokenize as
-// "unredacted PII", which would be a false positive, not real residual risk.
-func LooksLikeVersionString(line string, start int) bool {
-	ctxStart := start - versionContextWindow
-	if ctxStart < 0 {
-		ctxStart = 0
+// privateIPv4Ranges are the RFC 1918 blocks. Real SAS/Java version strings
+// never fall in them, while internal server addresses almost always do, so a
+// private-range dotted quad is always treated as an address even right after
+// a version keyword ("release 10.20.30.42 is the gateway"). Getting this
+// wrong over-redacts a version, which is the safe direction.
+var privateIPv4Ranges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+}
+
+// LooksLikeVersionString reports whether the dotted-quad-shaped match
+// line[start:end] is a version number rather than a real IPv4 address. It is
+// a version only when all of these hold:
+//   - a version keyword (v, version, release, sas) is the immediately
+//     preceding token;
+//   - it is not followed by ":<port>";
+//   - it is not in a private (RFC 1918) range.
+//
+// Exported so the audit scanner (internal/audit) applies the identical rule:
+// if the audit used its own heuristic, it would flag the version strings this
+// detector intentionally left alone as "unredacted PII".
+func LooksLikeVersionString(line string, start, end int) bool {
+	if !ipv4VersionKeyword.MatchString(line[:start]) {
+		return false
 	}
-	return ipv4VersionContext.MatchString(line[ctxStart:start])
+	if ipv4FollowedByPort.MatchString(line[end:]) {
+		return false
+	}
+	return !IPInSkipRanges(line[start:end], privateIPv4Ranges)
 }
 
 // IPv4Detector tokenizes dotted-quad IPv4 addresses. Its zero value is
 // valid (skips nothing); NewIPv4Detector attaches skip ranges from the
 // config's detectors.ipv4.skip_ranges.
 type IPv4Detector struct {
+	// Classify emits IPV4_PRIV (RFC 1918, loopback, link-local, CGNAT) or
+	// IPV4_PUB instead of IPV4, so sanitized output still shows whether
+	// traffic leaves the network (--ip-class).
+	Classify bool
+
 	// skipRanges are CIDR blocks whose addresses are deliberately left
 	// untokenized (e.g. non-sensitive internal ranges). Nil means skip
 	// nothing.
@@ -62,7 +88,7 @@ func (d IPv4Detector) Detect(line string) []Match {
 	var matches []Match
 	for _, loc := range locs {
 		start, end := loc[0], loc[1]
-		if LooksLikeVersionString(line, start) {
+		if LooksLikeVersionString(line, start, end) {
 			continue
 		}
 		if IPInSkipRanges(line[start:end], d.skipRanges) {
@@ -71,10 +97,28 @@ func (d IPv4Detector) Detect(line string) []Match {
 		matches = append(matches, Match{
 			Span:     Span{Start: start, End: end},
 			Value:    line[start:end],
-			Category: "IPV4",
+			Category: d.category(line[start:end]),
 		})
 	}
 	return matches
+}
+
+// nonPublicIPv4Ranges are the IPv4 blocks --ip-class reports as private.
+var nonPublicIPv4Ranges = append([]netip.Prefix{
+	netip.MustParsePrefix("127.0.0.0/8"),    // loopback
+	netip.MustParsePrefix("169.254.0.0/16"), // link-local
+	netip.MustParsePrefix("100.64.0.0/10"),  // carrier-grade NAT
+}, privateIPv4Ranges...)
+
+// category returns the token category for the IPv4 address ip.
+func (d IPv4Detector) category(ip string) string {
+	if !d.Classify {
+		return "IPV4"
+	}
+	if IPInSkipRanges(ip, nonPublicIPv4Ranges) {
+		return "IPV4_PRIV"
+	}
+	return "IPV4_PUB"
 }
 
 // IPInSkipRanges reports whether ipStr parses as an address inside one of
@@ -336,14 +380,37 @@ var urlPattern = regexp.MustCompile(`(?:https?|ftps?|sftp|jdbc:[a-z]+|tcp|ssl|ni
 // host[:port] boundary of a URL's authority component.
 var urlHost = regexp.MustCompile(`^[^:/?]+`)
 
-type URLDetector struct{}
+// URLDetector tokenizes URLs in one of two modes:
+//
+//   - HostOnly (the default chain's mode, --url-mode=host): only the
+//     sensitive parts are replaced -- the userinfo (user -> USER_NNN,
+//     password -> SECRET_REDACTED) and the host (HOST_NNN). Scheme, port,
+//     path and parameter names stay, because they are what troubleshooting
+//     needs: "http://HOST_003:8080", "jdbc:postgresql://HOST_002:9432/db".
+//     An IP-address host is left for the IPv4/IPv6 detectors that run next
+//     (so skip ranges and IPV4/IPV6 categories still apply), and "localhost"
+//     is left alone. Path segments holding PII are handled by the user-path
+//     detectors and the known-values sweep; credential parameter values were
+//     already redacted by CredentialsDetector.
+//   - Whole (zero value, --url-mode=whole): the entire URL becomes one
+//     URL_NNN token, the pre-0.2 behavior.
+type URLDetector struct {
+	HostOnly bool
+}
 
 func (URLDetector) Name() string { return "url" }
 
-func (URLDetector) Detect(line string) []Match {
+func (d URLDetector) Detect(line string) []Match {
 	locs := urlPattern.FindAllStringIndex(line, -1)
 	if locs == nil {
 		return nil
+	}
+	if d.HostOnly {
+		var matches []Match
+		for _, loc := range locs {
+			matches = append(matches, urlAuthorityMatches(line, loc[0], loc[1])...)
+		}
+		return matches
 	}
 	matches := make([]Match, 0, len(locs))
 	for _, loc := range locs {
@@ -354,6 +421,55 @@ func (URLDetector) Detect(line string) []Match {
 		})
 	}
 	return matches
+}
+
+// urlAuthorityEnd matches the characters that end a URL's authority
+// component (";" covers jdbc:sqlserver://host:1433;databaseName=x).
+const urlAuthorityEnd = "/?#;"
+
+// urlAuthorityMatches returns the userinfo and host matches for the URL at
+// line[s:e] (HostOnly mode).
+func urlAuthorityMatches(line string, s, e int) []Match {
+	idx := strings.Index(line[s:e], "://")
+	if idx < 0 {
+		return nil
+	}
+	a := s + idx + 3
+	ae := e
+	if i := strings.IndexAny(line[a:e], urlAuthorityEnd); i >= 0 {
+		ae = a + i
+	}
+
+	var matches []Match
+	h := a
+	if at := strings.LastIndexByte(line[a:ae], '@'); at >= 0 {
+		us, ue := a, a+at
+		if c := strings.IndexByte(line[us:ue], ':'); c >= 0 {
+			if ue > us+c+1 {
+				matches = append(matches, Match{Span: Span{Start: us + c + 1, End: ue}, Value: line[us+c+1 : ue], Redact: true})
+			}
+			ue = us + c
+		}
+		if ue > us {
+			matches = append(matches, Match{Span: Span{Start: us, End: ue}, Value: line[us:ue], Category: "USER"})
+		}
+		h = a + at + 1
+	}
+	if h >= ae || line[h] == '[' {
+		return matches // empty host, or a bracketed IPv6 literal (IPv6 detector)
+	}
+	he := ae
+	if c := strings.IndexByte(line[h:ae], ':'); c >= 0 {
+		he = h + c
+	}
+	host := line[h:he]
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return matches
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return matches // IP host: the IPv4/IPv6 detectors handle it
+	}
+	return append(matches, Match{Span: Span{Start: h, End: he}, Value: host, Category: "HOST"})
 }
 
 // EmbeddedHost extracts the host portion of a matched URL value, e.g.

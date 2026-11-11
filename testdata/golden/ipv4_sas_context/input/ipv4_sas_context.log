@@ -1,0 +1,8 @@
+Connecting to SAS server at 10.20.30.40 failed
+SAS Metadata 10.20.30.41:8561 refused
+release 10.20.30.42 is the gateway
+SAS 9.4.8.0 (TS1M8) starting
+release 9.4.8.0 installed
+version 1.2.3.4 loaded
+JVM 1.8.0_292
+Server: Apache Tomcat/9.0.85

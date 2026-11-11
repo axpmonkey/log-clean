@@ -1,6 +1,9 @@
 package detect
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 var (
 	awsAccessKeyPattern = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
@@ -60,14 +63,30 @@ func (SecretsDetector) Name() string { return "secrets" }
 func (SecretsDetector) Detect(line string) []Match {
 	var matches []Match
 
-	matches = append(matches, redactWhole(line, awsAccessKeyPattern)...)
-	matches = append(matches, redactGroup(line, awsSecretKeyPattern, 1)...)
-	matches = append(matches, redactGroup(line, apiKeyContextPattern, 1)...)
-	matches = append(matches, redactWhole(line, jwtPattern)...)
-	matches = append(matches, redactGroup(line, bearerPattern, 1)...)
-	matches = append(matches, redactGroup(line, gcpPrivateKeyPattern, 1)...)
-	matches = append(matches, redactWhole(line, sshKeyBeginPattern)...)
-	matches = append(matches, redactWhole(line, sshKeyEndPattern)...)
+	// Gated on required substrings, as in CredentialsDetector.
+	l := asciiLower(line)
+	if strings.Contains(line, "AKIA") {
+		matches = append(matches, redactWhole(line, awsAccessKeyPattern)...)
+	}
+	if strings.Contains(l, "aws_secret_access_key") {
+		matches = append(matches, redactGroup(line, awsSecretKeyPattern, 1)...)
+	}
+	if containsAny(l, "key", "token") {
+		matches = append(matches, redactGroup(line, apiKeyContextPattern, 1)...)
+	}
+	if strings.Contains(line, "eyJ") {
+		matches = append(matches, redactWhole(line, jwtPattern)...)
+	}
+	if strings.Contains(l, "bearer") {
+		matches = append(matches, redactGroup(line, bearerPattern, 1)...)
+	}
+	if strings.Contains(line, `"private_key"`) {
+		matches = append(matches, redactGroup(line, gcpPrivateKeyPattern, 1)...)
+	}
+	if strings.Contains(line, "-----") {
+		matches = append(matches, redactWhole(line, sshKeyBeginPattern)...)
+		matches = append(matches, redactWhole(line, sshKeyEndPattern)...)
+	}
 
 	return matches
 }

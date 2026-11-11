@@ -1,0 +1,9 @@
+redirect to /SASLogon/oauth/authorize?code=Xy9abcDEF123&state=qwerty
+https://sasprd03.corp.example.com/SASLogon/login?ticket=ST-12345-abc&service=x
+POST /SASLogon/oauth/token grant_type=authorization_code&code=Xy9abcDEF123&client_secret=s3cr3tval&redirect_uri=/SASDrive
+CAS ticket ST-67890-defGHI-cas01 validated
+callback?access_token=tokval1&id_token=idtok2&refresh_token=rt3&RelayState=rs4&SAMLResponse=PHNhbWw%2B
+/SASLogon/saml/SSO?SAMLRequest=fZJNT8MwDIbvSPyHKvc1&RelayState=rsABC
+"queryString": [{"name":"code","value":"Xy9abcDEF123"},{"name":"state","value":"qwerty"},{"name":"lang","value":"en"}]
+login form: username=sasdemo&password=Orion123&pwd=Orion123
+job state=RUNNING exit code=0

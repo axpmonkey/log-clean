@@ -1,0 +1,5 @@
+LDAP bind as DN_001 succeeded
+member: DN_002
+Group lookup for "DN_003" ok
+user (DN_004) disabled
+bind dn DN_005 used

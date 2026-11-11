@@ -46,10 +46,13 @@ func TestSanitizeEndToEnd(t *testing.T) {
 		t.Errorf("sanitized content = %q", sanitized)
 	}
 
-	for _, f := range []string{"_mapping.json", "_audit.txt", "_summary.txt", "_runlog.txt"} {
+	for _, f := range []string{"_audit.txt", "_summary.txt", "_runlog.txt"} {
 		if _, err := os.Stat(filepath.Join(outputDir, f)); err != nil {
 			t.Errorf("expected %s to exist: %v", f, err)
 		}
+	}
+	if _, err := os.Stat(DefaultMappingPath(outputDir)); err != nil {
+		t.Errorf("expected mapping file next to the output directory: %v", err)
 	}
 }
 
@@ -445,3 +448,5 @@ func TestSanitizeJDBCBareHostNoLongerLeaks(t *testing.T) {
 		t.Errorf("bare JDBC host not tokenized: %q", out)
 	}
 }
+
+func errorsAs(err error, target **Error) bool { return errors.As(err, target) }
