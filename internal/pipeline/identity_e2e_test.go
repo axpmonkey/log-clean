@@ -134,3 +134,31 @@ func TestJDBCEmbeddedCredentialsBareHostTokenized(t *testing.T) {
 		t.Errorf("bare host not tokenized as HOST_001: %q", got)
 	}
 }
+
+// SAS internal accounts in their <name>@saspw form stay readable -- even
+// when the same name was registered as a USER elsewhere, in which case the
+// sweep still replaces the other occurrences.
+func TestSASInternalAccountsNotMasked(t *testing.T) {
+	lines := []string{
+		`user=sastrust@saspw logged on; Identity sasadm@saspw; anon webanon@saspw; evs SASEVS@SASPW`,
+		`user=jsmith@saspw connected`,
+		`Reading /home/sastrust/x.txt`,
+		`trusted user sastrust@saspw again, plain sastrust here`,
+	}
+	p := New(identityDetectors())
+	for _, line := range lines {
+		p.ScanLine(line)
+	}
+	p.EnableKnownValuesSweep()
+	want := []string{
+		`user=sastrust@saspw logged on; Identity sasadm@saspw; anon webanon@saspw; evs SASEVS@SASPW`,
+		`user=USER_001@saspw connected`,
+		`Reading /home/USER_002/x.txt`,
+		`trusted user sastrust@saspw again, plain USER_002 here`,
+	}
+	for i, line := range lines {
+		if got := p.ReplaceLine(line); got != want[i] {
+			t.Errorf("line %d:\n got:  %q\n want: %q", i, got, want[i])
+		}
+	}
+}

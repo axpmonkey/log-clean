@@ -24,7 +24,7 @@ type UUIDDetector struct{}
 func (UUIDDetector) Name() string { return "uuid" }
 
 func (UUIDDetector) Detect(line string) []Match {
-	locs := uuidPattern.FindAllStringIndex(line, -1)
+	locs := findUUIDs(line) // uuidPattern
 	if locs == nil {
 		return nil
 	}

@@ -259,3 +259,32 @@ func TestAuditNoiseSuppressed(t *testing.T) {
 		}
 	}
 }
+
+// A rule's gate may only skip lines on which the rule finds nothing -- it is
+// a speed-up, never a behavior change.
+func TestAuditGatesAreConservative(t *testing.T) {
+	lines := []string{
+		"connected from 192.168.1.1 directly", "host db-prod-01.acme.internal leaked",
+		"mail jdoe@acme.internal", "nic 00:1A:2B:3C:4D:5E and 00-1a-2b-3c-4d-5e", "mixed 00:1a-2b:3c-4d:5e",
+		"node APP-UAT and qa1 and Stage2 and DR", "failover box-dr", "server web01-srv java8 X9", "\u212a1 \u017ftage",
+		"password = abcdefghij0123456789KLMNOP", "Token: ABCDEFGHIJKLMNOPQRSTUVWXYZ", "\u212aey Abcdefghij0123456789xx",
+		`C:\Users\asmith\x`, "/home/jdoe/x", "nothing here", "2026-11-10T12:00:00,123 INFO rc=0",
+	}
+	s := NewScanner()
+	for _, r := range s.rules {
+		if r.gate == nil {
+			continue
+		}
+		for _, line := range lines {
+			var hit bool
+			if r.find != nil {
+				hit = len(r.find(line)) > 0
+			} else {
+				hit = r.pattern.MatchString(line)
+			}
+			if hit && !r.gate(line, asciiLower(line)) {
+				t.Errorf("%s: gate rejects %q, but the rule matches it", r.name, line)
+			}
+		}
+	}
+}

@@ -180,15 +180,33 @@ func queryParamSecrets(line, lower string) []Match {
 		out = append(out, redactGroup(line, secretParamJSONPattern, 1)...)
 		out = append(out, redactGroup(line, secretJSONKeyPattern, 1)...)
 	}
-	if strings.IndexByte(lower, '=') >= 0 {
-		out = append(out, redactGroup(line, secretParamPattern, 1)...)
-		out = append(out, redactGroup(line, ambiguousParamPattern, 1)...)
+	switch {
+	case strings.IndexByte(lower, '=') < 0:
+	case !hasNonASCII(line):
+		out = append(out, redactSpans(line, findParamValues(line, secretParamKeys, false))...)
+		out = append(out, redactSpans(line, findParamValues(line, ambiguousParamKeys, true))...)
+	default: // (?i) folding of non-ASCII letters: see scanners.go
+		if hasParamKey(lower, secretParamKeys) {
+			out = append(out, redactGroup(line, secretParamPattern, 1)...)
+		}
+		if hasParamKey(lower, ambiguousParamKeys) {
+			out = append(out, redactGroup(line, ambiguousParamPattern, 1)...)
+		}
 	}
 	if strings.Contains(line, "T-") {
-		out = append(out, redactWhole(line, casTicketPattern)...)
+		out = append(out, redactSpans(line, findCASTickets(line))...)
 	}
 	return out
 }
+
+// secretParamKeys / ambiguousParamKeys gate secretParamPattern and
+// ambiguousParamPattern (see hasParamKey): most SAS log lines contain an '='
+// but no credential parameter name, and the case-insensitive alternations
+// are expensive to run on every one of them.
+var (
+	secretParamKeys    = toSet(strings.Split(strings.ToLower(secretParamNames), "|")...)
+	ambiguousParamKeys = toSet(strings.Split(ambiguousParamNames, "|")...)
+)
 
 // secretParamNameSet is every credential parameter name, lowercased.
 var secretParamNameSet = toSet(strings.Split(strings.ToLower(secretParamNames+"|"+ambiguousParamNames), "|")...)

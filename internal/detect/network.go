@@ -48,10 +48,10 @@ var privateIPv4Ranges = []netip.Prefix{
 // if the audit used its own heuristic, it would flag the version strings this
 // detector intentionally left alone as "unredacted PII".
 func LooksLikeVersionString(line string, start, end int) bool {
-	if !ipv4VersionKeyword.MatchString(line[:start]) {
+	if !hasVersionKeywordSuffix(line[:start]) { // ipv4VersionKeyword
 		return false
 	}
-	if ipv4FollowedByPort.MatchString(line[end:]) {
+	if end+1 < len(line) && line[end] == ':' && isDigitByte(line[end+1]) { // ipv4FollowedByPort
 		return false
 	}
 	return !IPInSkipRanges(line[start:end], privateIPv4Ranges)
@@ -81,7 +81,7 @@ func NewIPv4Detector(skipRanges []netip.Prefix) IPv4Detector {
 func (IPv4Detector) Name() string { return "ipv4" }
 
 func (d IPv4Detector) Detect(line string) []Match {
-	locs := ipv4Pattern.FindAllStringIndex(line, -1)
+	locs := findDottedQuads(line, true) // ipv4Pattern
 	if locs == nil {
 		return nil
 	}
@@ -162,7 +162,7 @@ func (IPv6Detector) Name() string { return "ipv6" }
 
 func (IPv6Detector) Detect(line string) []Match {
 	var matches []Match
-	for _, loc := range ipv6Core.FindAllStringIndex(line, -1) {
+	for _, loc := range findIPv6Candidates(line) { // ipv6Core
 		start, end := loc[0], loc[1]
 
 		// A real IPv6 address needs at least two colons (even the shortest

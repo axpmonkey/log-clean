@@ -271,3 +271,34 @@ func (d *KnownValuesDetector) FindAll(line string) [][2]int {
 	}
 	return out
 }
+
+// sasInternalAccounts are the internal accounts every SAS 9.4 deployment
+// creates, authenticated by the metadata server and written "<name>@saspw".
+// They are the same at every site and identify no person or customer, and
+// they matter for root-cause analysis (which identity a server connected
+// as), so they are left readable rather than pseudonymized. Lowercase.
+var sasInternalAccounts = toSet("sasadm", "sastrust", "sasevs", "webanon")
+
+const sasInternalDomain = "@saspw"
+
+// IsSASInternalAccount reports whether line[start:end] is one of the SAS
+// internal accounts in its "<name>@saspw" form (case-insensitive): either
+// the span is the whole "<name>@saspw", or it is "<name>" directly followed
+// by "@saspw" (detectors such as bare-user stop a username at the '@').
+// The same name anywhere else -- without the @saspw suffix -- is not
+// exempt.
+func IsSASInternalAccount(line string, start, end int) bool {
+	v := asciiLower(line[start:end])
+	if name, ok := strings.CutSuffix(v, sasInternalDomain); ok {
+		return sasInternalAccounts[name]
+	}
+	if !sasInternalAccounts[v] || end+len(sasInternalDomain) > len(line) {
+		return false
+	}
+	if !strings.EqualFold(line[end:end+len(sasInternalDomain)], sasInternalDomain) {
+		return false
+	}
+	// "@saspw" must end there: "sasadm@saspwx" is some other domain.
+	after := end + len(sasInternalDomain)
+	return after == len(line) || !isRE2WordChar(line[after]) && line[after] != '.' && line[after] != '-'
+}

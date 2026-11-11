@@ -108,6 +108,13 @@ func (p *Pipeline) walk(line string) []detect.Match {
 			if p.shouldIgnore(m) {
 				continue
 			}
+			// SAS internal accounts (sasadm@saspw, ...) stay readable. The
+			// span is still claimed so no later detector -- notably the
+			// known-values sweep -- tokenizes it instead.
+			if !m.Redact && detect.IsSASInternalAccount(line, m.Span.Start, m.Span.End) {
+				state.Claim(m.Span)
+				continue
+			}
 			state.Claim(m.Span)
 			accepted = append(accepted, m)
 		}

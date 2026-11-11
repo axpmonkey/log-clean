@@ -7,6 +7,7 @@ package audit
 import (
 	"net/netip"
 	"regexp"
+	"strings"
 
 	"sas-log-sanitize/internal/detect"
 )
@@ -94,6 +95,11 @@ type rule struct {
 	// need more than "does this regex match" (e.g. checking a captured
 	// group, or proximity between two separate patterns).
 	find func(line string) [][2]int
+	// gate, if set, is a cheap check run before the rule: false means the
+	// rule cannot match this line, so its regex is skipped. It must never
+	// return false for a line the rule would match
+	// (TestAuditGatesAreConservative). lower is the line ASCII-lowercased.
+	gate func(line, lower string) bool
 }
 
 // Scanner holds the set of audit rules to run against sanitized text.
@@ -131,7 +137,9 @@ func NewScanner() *Scanner {
 		// version string the detector intentionally left untouched (e.g.
 		// "SAS 9.4.1.2") isn't then flagged here as unredacted PII.
 		{name: "unredacted-ipv4", severity: SeverityHigh,
-			pattern: regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`),
+			// \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b, hand-written for speed.
+			find: detect.FindDottedQuads,
+			gate: func(line, _ string) bool { return strings.Count(line, ".") >= 3 },
 			suppress: func(line string, start, end int) bool {
 				return detect.LooksLikeVersionString(line, start, end) ||
 					detect.IPInSkipRanges(line[start:end], s.IPv4SkipRanges)
@@ -144,20 +152,28 @@ func NewScanner() *Scanner {
 		// shape regex. High findings need to stay rare on real sanitized
 		// output for --strict to be usable.
 		{name: "unredacted-fqdn", severity: SeverityHigh,
-			find: func(line string) [][2]int { return findValidFQDNs(line, s.Ignore) }},
+			find: func(line string) [][2]int { return findValidFQDNs(line, s.Ignore) },
+			gate: func(line, _ string) bool { return strings.IndexByte(line, '.') >= 0 }},
 
 		// Looks for what the run *knows* is sensitive, not just for what
 		// looks like PII: every original value in the mapping (and each
 		// host's short name). Catches leaks no shape rule can, such as a
 		// bare username, and any future detector regression automatically.
 		{name: "known-original-value", severity: SeverityHigh,
-			find: func(line string) [][2]int { return s.Known.FindAll(line) }},
+			find: func(line string) [][2]int { return s.Known.FindAll(line) },
+			// A registered name written as a SAS internal account
+			// ("sastrust@saspw") was deliberately left untouched.
+			suppress: detect.IsSASInternalAccount},
 
 		{name: "email-shape", severity: SeverityHigh,
-			pattern: regexp.MustCompile(`\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b`)},
+			pattern: regexp.MustCompile(`\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b`),
+			gate:    func(line, _ string) bool { return strings.IndexByte(line, '@') >= 0 }},
 
 		{name: "mac-shape", severity: SeverityHigh,
-			pattern: regexp.MustCompile(`\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b`)},
+			pattern: regexp.MustCompile(`\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b`),
+			gate: func(line, _ string) bool {
+				return strings.Count(line, ":")+strings.Count(line, "-") >= 5
+			}},
 
 		// Deliberately broad per the plan: catches bare words shaped like
 		// environment-suffixed hostnames (e.g. "app-prod01", "db-uat") that
@@ -166,7 +182,10 @@ func NewScanner() *Scanner {
 		// --strict, exactly because of that noise.
 		{name: "hostname-shaped-bare-word", severity: SeverityMedium,
 			pattern:  regexp.MustCompile(`(?i)\b[a-z][a-z0-9-]*-?(?:prod|dev|uat|qa|stage|stg|dr|test)[0-9]*\b`),
-			suppress: suppressOwnTokenFragment},
+			suppress: suppressOwnTokenFragment,
+			gate: func(line, lower string) bool {
+				return containsAny(lower, "prod", "dev", "uat", "qa", "stage", "stg", "dr", "test") || hasNonASCII(line)
+			}},
 
 		// Similarly broad: any letters-then-digits word, optionally with a
 		// server-ish suffix. Will also match things like "log4j" or
@@ -177,16 +196,23 @@ func NewScanner() *Scanner {
 			pattern: regexp.MustCompile(`(?i)\b[a-z]+[0-9]+(?:-(?:srv|server|host|node|db|web|app|mq))?\b`),
 			suppress: func(line string, start, end int) bool {
 				return suppressOwnTokenFragment(line, start, end) || isKnownNonPIIWord(line, start, end)
-			}},
+			},
+			gate: func(line, _ string) bool { return hasLetterThenDigit(line) || hasNonASCII(line) }},
 
 		{name: "long-random-near-credential-keyword", severity: SeverityMedium,
-			find: findLongRandomNearCredentialKeyword},
+			find: findLongRandomNearCredentialKeyword,
+			gate: func(line, lower string) bool {
+				return (containsAny(lower, "password", "token", "secret", "key", "credential") || hasNonASCII(line)) &&
+					hasAlnumRun(line, 20)
+			}},
 
 		{name: "windows-path-with-username", severity: SeverityMedium,
-			find: findWindowsPathWithNonTokenUsername},
+			find: findWindowsPathWithNonTokenUsername,
+			gate: func(line, _ string) bool { return strings.Contains(line, `C:\Users\`) }},
 
 		{name: "unix-path-with-username", severity: SeverityMedium,
-			find: findUnixPathWithNonTokenUsername},
+			find: findUnixPathWithNonTokenUsername,
+			gate: func(line, _ string) bool { return strings.Contains(line, "/home/") }},
 	}
 	return s
 }
@@ -195,7 +221,11 @@ func NewScanner() *Scanner {
 // file and lineNum are attached to each finding for the audit report.
 func (s *Scanner) ScanLine(file string, lineNum int, line string) []Finding {
 	var findings []Finding
+	lower := asciiLower(line)
 	for _, r := range s.rules {
+		if r.gate != nil && !r.gate(line, lower) {
+			continue
+		}
 		var locs [][2]int
 		if r.find != nil {
 			locs = r.find(line)
@@ -306,4 +336,73 @@ func findPathWithNonTokenUsername(line string, pattern *regexp.Regexp) [][2]int 
 		out = append(out, [2]int{loc[0], loc[1]})
 	}
 	return out
+}
+
+// ---- Rule gates -------------------------------------------------------------
+
+// asciiLower lowercases ASCII letters only, so byte offsets are unchanged.
+func asciiLower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			b := []byte(s)
+			for j := i; j < len(b); j++ {
+				if b[j] >= 'A' && b[j] <= 'Z' {
+					b[j] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNonASCII makes the gates of (?i) rules conservative: case folding maps
+// a few non-ASCII letters (the Kelvin sign, long s) onto ASCII ones.
+func hasNonASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIILetter(c byte) bool { return c|0x20 >= 'a' && c|0x20 <= 'z' }
+func isDigit(c byte) bool       { return c >= '0' && c <= '9' }
+
+// hasLetterThenDigit reports whether an ASCII letter is directly followed by
+// a digit somewhere in s -- required by the "[a-z]+[0-9]+" rule.
+func hasLetterThenDigit(s string) bool {
+	for i := 1; i < len(s); i++ {
+		if isDigit(s[i]) && isASCIILetter(s[i-1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAlnumRun reports whether s has n or more consecutive ASCII letters or
+// digits.
+func hasAlnumRun(s string, n int) bool {
+	run := 0
+	for i := 0; i < len(s); i++ {
+		if isDigit(s[i]) || isASCIILetter(s[i]) {
+			run++
+			if run >= n {
+				return true
+			}
+		} else {
+			run = 0
+		}
+	}
+	return false
 }

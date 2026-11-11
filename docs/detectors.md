@@ -22,11 +22,23 @@ a line the detector would match.
 | `UNCDetector` | `UNC` | Pseudonymize whole value | Embedded server also registered into `HOST`. |
 | `KerberosDetector` | `KRB` | Pseudonymize | Mostly catches bare (non-dotted) realms; dotted uppercase realms are usually claimed by `EmailDetector` first. |
 | `DomainUserDetector` | `DOMAIN` + `USER` | Pseudonymize both parts | `DOMAIN\user` -> `DOMAIN_NNN\USER_NNN`. `DOMAIN` tokens are case-insensitive. |
-| `BareUserDetector` | `USER` | Pseudonymize | `userid=`/`user=`/`username=`/`metaUser=`/`Authenticated user:` forms. |
+| `BareUserDetector` | `USER` | Pseudonymize | `userid=`/`user=`/`username=`/`metaUser=`/`Authenticated user:` forms, and `uid=` when the value starts with a letter (numeric Unix uids such as `uid=1001(sas)` are left alone; a `uid=` inside a DN is part of the DN token). |
 | `UnixUserPathDetector` | `USER` | Pseudonymize username portion only | `/home/`, `/Users/`, `/export/home/`. |
 | `WindowsUserPathDetector` | `USER` | Pseudonymize username portion only | `C:\Users\`, `C:\Documents and Settings\`. |
 | `AllowlistDetector` | `HOST` | Pseudonymize | Customer-supplied (`--hostlist`), literal substring matching. Only in the chain when a hostlist is given. |
 | `KnownValuesDetector` | `USER` / `HOST` | Pseudonymize | Added for Pass 2 only, last in the chain: replaces every registered `USER`/`HOST` value (and each host's short name) wherever it appears. See architecture.md, "Cross-detector consistency". |
+
+### SAS internal accounts
+
+The SAS 9.4 internal accounts `sasadm@saspw`, `sastrust@saspw`,
+`sasevs@saspw` and `webanon@saspw` are never pseudonymized: they are the
+same at every site, identify no person, and show which identity a server
+connected as. The exemption applies only to the `<name>@saspw` form
+(case-insensitive), whichever detector finds it, including the known-values
+sweep. The same name elsewhere (`/home/sastrust/`, `user=sastrust`) is
+still tokenized, and other `@saspw` accounts (`jsmith@saspw`) are still
+masked. The list is `sasInternalAccounts` in
+`internal/detect/knownvalues.go`.
 
 ## Credential rules
 

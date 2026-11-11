@@ -15,11 +15,14 @@ var emailPattern = regexp.MustCompile(`\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA
 var kerberosPattern = regexp.MustCompile(`\b[a-zA-Z0-9._-]+@[A-Z][A-Z0-9.-]*\b`)
 
 // bareUserPattern matches usernames in the key=value and label: value
-// positions SAS logs commonly use. Two alternatives because Go's RE2 doesn't
-// support named groups participating in the same overall match cleanly
-// across alternation in older syntax -- using separate capture groups and
-// checking which one fired is simpler than juggling subexpression names.
-var bareUserPattern = regexp.MustCompile(`(?i)\b(?:userid|user|username|metauser)\s*=\s*["']?([a-zA-Z0-9._-]+)|Authenticated user:\s*([a-zA-Z0-9._-]+)`)
+// positions SAS logs commonly use. Separate alternatives, each with its own
+// capture group; Detect uses whichever group fired.
+//
+// "uid=" only takes a value starting with a letter: Unix id(1) output
+// ("uid=1001(sas) gid=...") puts a numeric user ID there, which is not a
+// username. A uid= inside an LDAP DN never gets here -- the DN detector runs
+// earlier and claims the whole DN.
+var bareUserPattern = regexp.MustCompile(`(?i)\b(?:userid|user|username|metauser)\s*=\s*["']?([a-zA-Z0-9._-]+)|Authenticated user:\s*([a-zA-Z0-9._-]+)|\buid\s*=\s*["']?([a-zA-Z][a-zA-Z0-9._-]*)`)
 
 type EmailDetector struct{}
 
@@ -44,9 +47,12 @@ func (BareUserDetector) Name() string { return "bare-user" }
 func (BareUserDetector) Detect(line string) []Match {
 	var matches []Match
 	for _, loc := range bareUserPattern.FindAllStringSubmatchIndex(line, -1) {
-		s, e := loc[2], loc[3]
-		if s < 0 {
-			s, e = loc[4], loc[5]
+		s, e := -1, -1
+		for g := 1; 2*g+1 < len(loc); g++ {
+			if loc[2*g] >= 0 {
+				s, e = loc[2*g], loc[2*g+1]
+				break
+			}
 		}
 		if s < 0 {
 			continue

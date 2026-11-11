@@ -2,6 +2,7 @@ package detect
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +37,29 @@ func TestKnownValuesDetectorMatching(t *testing.T) {
 	}
 	if m := d.Detect("ping PGHOST01")[0]; m.Value != "pghost01.corp.example.com" || m.Category != "HOST" {
 		t.Errorf("short name maps to %+v", m)
+	}
+}
+
+func TestIsSASInternalAccount(t *testing.T) {
+	cases := []struct {
+		line string
+		val  string // the span, found in line
+		want bool
+	}{
+		{"connected as sasadm@saspw ok", "sasadm@saspw", true},
+		{"user=sastrust@saspw", "sastrust", true},
+		{"user=SASEVS@SASPW;", "SASEVS", true},
+		{"anon webanon@saspw", "webanon", true},
+		{"user=sastrust", "sastrust", false},           // no @saspw
+		{"user=sastrust@saspwx", "sastrust", false},    // other domain
+		{"mail sastrust@saspw.com", "sastrust", false}, // email domain
+		{"user=jsmith@saspw", "jsmith", false},         // not a SAS internal account
+		{"x jsmith@saspw", "jsmith@saspw", false},
+	}
+	for _, c := range cases {
+		start := strings.Index(c.line, c.val)
+		if got := IsSASInternalAccount(c.line, start, start+len(c.val)); got != c.want {
+			t.Errorf("IsSASInternalAccount(%q, %q) = %v, want %v", c.line, c.val, got, c.want)
+		}
 	}
 }

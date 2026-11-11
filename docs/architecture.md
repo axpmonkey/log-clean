@@ -80,7 +80,16 @@ Two cheap checks keep most regexes off most lines: detectors may implement
 `detect.Prefilter` (`MightMatch`: e.g. no `@` means no email), and the
 credential and secret detectors gate each of their rules on a keyword it
 requires. Both are conservative -- `TestPrefiltersAreConservative` checks
-that a prefilter never rejects a line its detector would match.
+that a prefilter never rejects a line its detector would match. The audit
+rules have the same kind of gate (`TestAuditGatesAreConservative`).
+
+The patterns that run on nearly every line -- dotted quads (detector and
+audit rule), UUIDs, IPv6 candidate runs, CAS tickets, credential query
+parameters and the version-keyword check -- are hand-written scanners
+(`internal/detect/scanners.go`) instead of regexes. Each returns exactly
+what its regex would; the regexes stay in the source as the reference, and
+`TestScannersMatchRegexps` / `FuzzScanners` compare the two on random
+input.
 
 ## HAR files
 

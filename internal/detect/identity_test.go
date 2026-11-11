@@ -108,6 +108,10 @@ func TestBareUserDetector(t *testing.T) {
 		{"username equals quoted", `username="jdoe" found`, []string{"jdoe"}},
 		{"metauser equals", "metaUser=sasadm authenticated", []string{"sasadm"}},
 		{"authenticated user label", "Authenticated user: jdoe", []string{"jdoe"}},
+		{"uid equals", "uid=jsmith@saspw connected", []string{"jsmith"}},
+		{"uid upper quoted", "UID = 'asmith' bound", []string{"asmith"}},
+		{"uid numeric skipped", "uid=1001(sas) gid=1001(sas)", nil},
+		{"uuid not uid", "uuid=abc123 found", nil},
 
 		{"plain text", "nothing user-shaped here", nil},
 		{"user word without equals", "the user is unspecified", nil},
