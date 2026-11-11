@@ -149,9 +149,10 @@ UUID claim-only first, then credentials/secrets (full redaction), then
 identity/network/path detectors from broadest-and-most-sensitive to
 narrowest, with the customer hostname allowlist substring pass after them
 and the known-values sweep (added for Pass 2) last of all. Order matters
-because of the span-claiming rule above -- see the ordering table and
-rationale in the original design plan (`sas-log-sanitize-plan.md`, Decision
-4) if available, or `internal/pipeline/detectors.go`.
+because of the span-claiming rule above -- see `internal/pipeline/detectors.go`.
+(Code comments citing "plan Decision N" refer to the original design plan,
+`sas-log-sanitize-plan.md`, which was removed from the tree; see it with
+`git log -p --all -- sas-log-sanitize-plan.md`.)
 
 The UUID detector runs first so nothing matches *inside* a UUID, but it does
 not claim a UUID that is the value of a credential (a CSRF token, a session

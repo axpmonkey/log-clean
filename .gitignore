@@ -1,1 +1,4 @@
 .DS_Store
+
+# Host build from `make build` (a copy of one of the platform binaries)
+dist/sas-log-sanitize
