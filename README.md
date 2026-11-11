@@ -29,33 +29,58 @@ directory. The mapping file goes *next to* the output directory, at
 
 ## Installation
 
-Pre-built binaries are checked into [`dist/`](dist/) -- clone the repo and run
-the one matching your platform, no Go toolchain required:
+Download the binary for your platform from the
+[latest release](https://github.com/axpmonkey/log-clean/releases/latest) --
+no Go toolchain required:
 
-| Platform | Binary |
+| Platform | File |
 |---|---|
-| Linux (amd64) | `dist/sas-log-sanitize-linux-amd64` |
-| Windows (amd64) | `dist/sas-log-sanitize-windows-amd64.exe` |
-| macOS (arm64) | `dist/sas-log-sanitize-darwin-arm64` |
+| Linux (amd64) | `sas-log-sanitize-linux-amd64` |
+| Windows (amd64) | `sas-log-sanitize-windows-amd64.exe` |
+| macOS (arm64) | `sas-log-sanitize-darwin-arm64` |
+
+Each release also has a `SHA256SUMS` file. On Linux:
 
 ```sh
-git clone git@github.com:axpmonkey/log-clean.git
-./log-clean/dist/sas-log-sanitize-linux-amd64 -i /path/to/log-bundle -o /path/to/sanitized-output
+base=https://github.com/axpmonkey/log-clean/releases/latest/download
+curl -LO $base/sas-log-sanitize-linux-amd64
+curl -LO $base/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
+chmod +x sas-log-sanitize-linux-amd64
+./sas-log-sanitize-linux-amd64 --version
 ```
 
-On macOS/Linux, mark it executable first if needed: `chmod +x dist/sas-log-sanitize-*`.
+On Windows, compare `certutil -hashfile sas-log-sanitize-windows-amd64.exe SHA256`
+with the line for that file in `SHA256SUMS`. With the GitHub CLI:
+`gh release download --repo axpmonkey/log-clean --pattern 'sas-log-sanitize-linux-amd64'`.
+
+Release files are served from `objects.githubusercontent.com`; if a corporate
+proxy blocks that host, build from source instead (below).
 
 ### Building from source
 
-Only needed if you're changing the tool itself, or `dist/` is out of date:
-
 ```sh
 make build      # builds for your current platform into dist/
-make cross      # cross-compiles linux-amd64, windows-amd64, darwin-arm64
+make cross      # cross-compiles linux-amd64, windows-amd64, darwin-arm64 into dist/
 ```
 
-All `make` targets run inside a `golang:1.26` Docker container, so a local Go
-install isn't required. See the Makefile for details.
+`dist/` is not tracked in git. Builds are stamped with `git describe`
+(e.g. `v0.2.0-3-gabc1234`), shown by `--version`.
+
+### Releasing
+
+```sh
+make release RELEASE=0.3.0 [NOTES=path/to/notes.md]
+```
+
+Run on an up-to-date, clean `main`: it cross-compiles with version
+`v0.3.0`, writes and verifies `SHA256SUMS`, tags the commit, pushes the tag,
+and publishes the GitHub release with the binaries attached (requires the
+`gh` CLI, logged in). Without `NOTES`, GitHub generates the notes.
+
+Build, test and lint targets run inside a `golang:1.26` Docker container, so
+a local Go install isn't required; `make release` also uses `git` and `gh` on
+the host. See the Makefile for details.
 
 ## Usage
 

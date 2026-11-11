@@ -1,4 +1,5 @@
 .DS_Store
 
-# Host build from `make build` (a copy of one of the platform binaries)
-dist/sas-log-sanitize
+# Build output (make build / cross / release). Binaries are published as
+# GitHub release assets, not committed.
+dist/
