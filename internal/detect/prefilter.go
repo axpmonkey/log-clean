@@ -94,9 +94,46 @@ func (DomainUserDetector) MightMatch(line string) bool { return strings.IndexByt
 func (WindowsUserPathDetector) MightMatch(line string) bool {
 	return strings.IndexByte(line, '\\') >= 0
 }
+
+// Every bareUserPattern alternative is "user" (alone or followed by "id" or
+// "name", which also covers "metauser") or "uid", then optional spaces and
+// '=' -- or, for "Authenticated user:", ':'. Lines that merely mention a
+// user ("user sasdemo logged in") are skipped.
 func (BareUserDetector) MightMatch(line string) bool {
+	if hasNonASCII(line) {
+		return true
+	}
 	l := asciiLower(line)
-	return strings.Contains(l, "user") || strings.Contains(l, "uid") || hasNonASCII(line)
+	return keywordThenAssign(l, "user", "id", "name") || keywordThenAssign(l, "uid")
+}
+
+// keywordThenAssign reports whether kw, optionally followed by one of
+// suffixes, appears in lower directly before optional RE2 spaces and '=' or
+// ':'.
+func keywordThenAssign(lower, kw string, suffixes ...string) bool {
+	for from := 0; ; {
+		k := strings.Index(lower[from:], kw)
+		if k < 0 {
+			return false
+		}
+		end := from + k + len(kw)
+		if assignAt(lower, end) {
+			return true
+		}
+		for _, suf := range suffixes {
+			if strings.HasPrefix(lower[end:], suf) && assignAt(lower, end+len(suf)) {
+				return true
+			}
+		}
+		from = from + k + 1
+	}
+}
+
+func assignAt(s string, i int) bool {
+	for i < len(s) && isRE2Space(s[i]) {
+		i++
+	}
+	return i < len(s) && (s[i] == '=' || s[i] == ':')
 }
 func (UnixUserPathDetector) MightMatch(line string) bool {
 	return strings.Contains(line, "/home/") || strings.Contains(line, "/Users/")
@@ -110,4 +147,33 @@ func containsAny(s string, subs ...string) bool {
 		}
 	}
 	return false
+}
+
+// headerNameGate is the gate for the Authorization and Cookie rules: every
+// one of their patterns has the header name followed by an optional '"',
+// optional spaces, and ':' (header / JSON key) or ',' (HAR name-value
+// pair). The bare word alone -- e.g. "com.sas.svcs.authorization.Foo" in a
+// class name -- can't match. Lines with non-ASCII bytes always pass ((?i)
+// folds the Kelvin sign onto 'k').
+func headerNameGate(line, lower, name string) bool {
+	if hasNonASCII(line) {
+		return true
+	}
+	for from := 0; ; {
+		k := strings.Index(lower[from:], name)
+		if k < 0 {
+			return false
+		}
+		j := from + k + len(name)
+		if j < len(lower) && lower[j] == '"' {
+			j++
+		}
+		for j < len(lower) && isRE2Space(lower[j]) {
+			j++
+		}
+		if j < len(lower) && (lower[j] == ':' || lower[j] == ',') {
+			return true
+		}
+		from += k + 1
+	}
 }

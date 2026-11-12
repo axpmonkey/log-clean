@@ -1,5 +1,7 @@
 package detect
 
+import "strings"
+
 // Hand-written scanners for the regexes that run on nearly every log line.
 // Go's regexp engine has no literal prefix to search for in patterns such as
 // `\b\d{1,3}\.` and so tries a match at every byte; these loops do the same
@@ -128,6 +130,156 @@ func matchUUID(line string, i int) (int, bool) {
 		i += n
 	}
 	return i, wordBoundaryAfter(line, i)
+}
+
+func isAlnumByte(c byte) bool { return isDigitByte(c) || isASCIILetter(c) }
+
+// FindFQDNCandidates scans for fqdnPattern (shared with the audit pass):
+//
+//	\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b
+//
+// The regex has no real choices to backtrack over. A label consumes only
+// [a-zA-Z0-9-] and must be followed by '.', so each label\. iteration takes
+// the whole [a-zA-Z0-9-] run up to the next byte, which must be '.'. The
+// final [a-zA-Z]{2,}\b can only end where the letter run ends (inside the
+// run the next byte is a word character). So from a start, the labels form
+// one fixed chain, and the greedy + means the longest prefix of that chain
+// followed by a valid TLD wins.
+func FindFQDNCandidates(line string) [][2]int {
+	if strings.IndexByte(line, '.') < 0 {
+		return nil
+	}
+	var out [][2]int
+	for i := 0; i < len(line); i++ {
+		if !isAlnumByte(line[i]) || !wordBoundaryBefore(line, i) {
+			continue
+		}
+		if end, ok := matchFQDN(line, i); ok {
+			out = append(out, [2]int{i, end})
+			i = end - 1
+		}
+	}
+	return out
+}
+
+// matchFQDN returns the end of the fqdnPattern match starting at i, if any.
+func matchFQDN(line string, i int) (int, bool) {
+	best := -1
+	p := i
+	for {
+		// One label\. iteration starting at p.
+		q := p
+		for q < len(line) && (isAlnumByte(line[q]) || line[q] == '-') {
+			q++
+		}
+		if q == len(line) || line[q] != '.' || q-p > 63 || !isAlnumByte(line[p]) || !isAlnumByte(line[q-1]) {
+			break
+		}
+		p = q + 1
+		// A TLD right after this dot: a whole letter run of 2+ ending at \b.
+		e := p
+		for e < len(line) && isASCIILetter(line[e]) {
+			e++
+		}
+		if e-p >= 2 && wordBoundaryAfter(line, e) {
+			best = e // a later (longer) chain overrides this one
+		}
+		if p == len(line) {
+			break
+		}
+	}
+	return best, best >= 0
+}
+
+// FindMACs scans for macPattern (shared with the audit pass):
+//
+//	\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b
+//
+// Every piece has a fixed length, so a match from a start is all or nothing.
+func FindMACs(line string) [][2]int {
+	var out [][2]int
+	for i := 0; i+17 <= len(line); i++ {
+		if !isHexByte(line[i]) || !wordBoundaryBefore(line, i) {
+			continue
+		}
+		if matchMAC(line, i) {
+			out = append(out, [2]int{i, i + 17})
+			i += 16
+		}
+	}
+	return out
+}
+
+func matchMAC(line string, i int) bool {
+	for g := 0; g < 6; g++ {
+		p := i + 3*g
+		if !isHexByte(line[p]) || !isHexByte(line[p+1]) {
+			return false
+		}
+		if g < 5 && line[p+2] != ':' && line[p+2] != '-' {
+			return false
+		}
+	}
+	return wordBoundaryAfter(line, i+17)
+}
+
+// urlSchemes are urlPattern's literal schemes (jdbc:[a-z]+ is handled
+// separately).
+var urlSchemes = []string{"http", "https", "ftp", "ftps", "sftp", "tcp", "ssl", "nio", "amqp", "amqps", "mqtt", "ldap", "ldaps"}
+
+// isURLTailByte is urlPattern's tail class [^\s<>"',;)] (all ASCII, so a
+// byte test agrees with RE2's rune test, invalid UTF-8 included).
+func isURLTailByte(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\f', '\r', '<', '>', '"', '\'', ',', ';', ')':
+		return false
+	}
+	return true
+}
+
+// findURLs scans for urlPattern:
+//
+//	(?:https?|ftps?|sftp|jdbc:[a-z]+|tcp|ssl|nio|amqps?|mqtt|ldaps?)://[^\s<>"',;)]+
+//
+// Every match contains "://", so the scan jumps between those. A scheme
+// holds no '/', so it lies between the previous "://" (or the end of the
+// previous match) and this one, and must end exactly at it; the leftmost
+// scheme start wins, as in the regex. The tail is a single greedy class
+// that must take at least one byte.
+func findURLs(line string) [][2]int {
+	var out [][2]int
+	from := 0 // where the regex would resume searching
+	for c := 0; ; {
+		k := strings.Index(line[c:], "://")
+		if k < 0 {
+			return out
+		}
+		c += k
+		start := -1
+		for _, sch := range urlSchemes {
+			if p := c - len(sch); p >= from && (start < 0 || p < start) && line[p:c] == sch {
+				start = p
+			}
+		}
+		// jdbc:[a-z]+ -- the letters must start right after "jdbc:".
+		a := c
+		for a > from && line[a-1] >= 'a' && line[a-1] <= 'z' {
+			a--
+		}
+		if a < c && a-5 >= from && line[a-5:a] == "jdbc:" && (start < 0 || a-5 < start) {
+			start = a - 5
+		}
+		e := c + 3
+		for e < len(line) && isURLTailByte(line[e]) {
+			e++
+		}
+		if start < 0 || e == c+3 {
+			c++
+			continue
+		}
+		out = append(out, [2]int{start, e})
+		from, c = e, e
+	}
 }
 
 // isIPv6CoreByte is ipv6Core's class: [0-9a-fA-F:.]

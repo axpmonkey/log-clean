@@ -11,13 +11,21 @@ import (
 // claim-only matches (Category == "", e.g. UUIDs) are never registered --
 // secrets must never appear in the mapping file (plan Decision 5).
 func (p *Pipeline) ScanLine(line string) {
-	for _, m := range p.walk(line) {
+	p.ScanLineMask(line)
+}
+
+// ScanLineMask is ScanLine, also returning the line's DetectorMask for
+// Pass 2.
+func (p *Pipeline) ScanLineMask(line string) DetectorMask {
+	matches, found := p.walkMasked(line, AllDetectors)
+	for _, m := range matches {
 		if m.Redact || m.Category == "" {
 			continue
 		}
 		p.Registry.TokenFor(m.Category, m.Value)
 		registerEmbeddedHost(p, m)
 	}
+	return found
 }
 
 // ScanText runs ScanLine over each line of a possibly multi-line string

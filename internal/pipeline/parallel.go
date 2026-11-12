@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"hash/maphash"
 	"io"
 	"runtime"
 	"sync"
@@ -26,6 +27,8 @@ func (p *Pipeline) forkForScan() *Pipeline {
 		Ignore:            p.Ignore,
 		IPv4SkipRanges:    p.IPv4SkipRanges,
 		replacementCounts: make(map[string]int),
+		scanDetectors:     p.scanDetectors,
+		sweepEnabled:      p.sweepEnabled,
 	}
 }
 
@@ -186,6 +189,9 @@ func (c countingReader) Read(b []byte) (int, error) {
 // overhead is negligible next to the detector regexes.
 const chunkLines = 1024
 
+// windowPerWorker is how many chunks per worker may be in flight per file.
+const windowPerWorker = 4
+
 // runEnv carries the per-run state the file-level functions share.
 type runEnv struct {
 	opts RunOptions
@@ -194,13 +200,21 @@ type runEnv struct {
 	// sem bounds CPU-bound chunk work across all files to Workers at once.
 	sem chan struct{}
 	// window bounds how many chunks of one file are in flight (read but not
-	// yet emitted), which bounds memory per file.
+	// yet emitted), which bounds memory per file. Chunks are emitted in
+	// order, so one slow chunk (e.g. on an efficiency core of a hybrid CPU,
+	// or a busy vCPU) stalls emission; several chunks per worker of slack
+	// keeps the other workers busy meanwhile. Memory stays bounded:
+	// windowPerWorker*Workers chunks of chunkLines lines.
 	window int
+	// tmpDir returns the run's private temporary directory (created on
+	// first use); seed hashes chunks for the detector-mask sidecars.
+	tmpDir func() (string, error)
+	seed   maphash.Seed
 }
 
 func newRunEnv(opts RunOptions, log *runlog.Logger) *runEnv {
 	w := workerCount(opts.Workers)
-	return &runEnv{opts: opts, log: log, sem: make(chan struct{}, w), window: w + 2}
+	return &runEnv{opts: opts, log: log, sem: make(chan struct{}, w), window: windowPerWorker*w + 2, seed: maphash.MakeSeed()}
 }
 
 // lineItem is one input line plus what the sequential reader decided about
@@ -220,6 +234,12 @@ type chunk struct {
 	lines []lineItem
 	done  chan struct{}
 
+	// masks are the lines' DetectorMasks: computed in Pass 1 (with hash,
+	// for the sidecar), read back from it in Pass 2 (with wantHash, the
+	// Pass 1 hash the chunk must still have for them to apply).
+	masks          []DetectorMask
+	hash, wantHash uint64
+
 	reg      *tokenize.Registry // Pass 1 result
 	out      []string           // Pass 2 results
 	findings []audit.Finding
@@ -234,7 +254,10 @@ type chunk struct {
 // core: Pass 1 chunks scan into their own registries and are merged in chunk
 // order, Pass 2 chunks are replaced in parallel and written in order, so
 // the result is identical to reading the file line by line.
-func processChunks(lr *ioenc.LineReader, env *runEnv, work func(*chunk), emit func(*chunk) error) (int, error) {
+//
+// prepare, if non-nil, is called on each chunk by the reader, in order,
+// before the chunk is handed to a worker.
+func processChunks(lr *ioenc.LineReader, env *runEnv, prepare, work func(*chunk), emit func(*chunk) error) (int, error) {
 	ordered := make(chan *chunk, env.window)
 	stop := make(chan struct{})
 	var readErr error
@@ -261,6 +284,9 @@ func processChunks(lr *ioenc.LineReader, env *runEnv, work func(*chunk), emit fu
 			}
 			if len(c.lines) == 0 {
 				return
+			}
+			if prepare != nil {
+				prepare(c)
 			}
 			go func(c *chunk) {
 				env.sem <- struct{}{}

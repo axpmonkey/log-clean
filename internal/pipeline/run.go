@@ -136,6 +136,10 @@ func Run(p *Pipeline, opts RunOptions, log *runlog.Logger) (RunResult, error) {
 	}
 	workers := workerCount(opts.Workers)
 	env := newRunEnv(opts, log)
+	// Resolved here, once: tmpDir creates the directory lazily and isn't
+	// safe to call from the parallel Pass 1 file workers.
+	maskDir, maskDirErr := tmpDir()
+	env.tmpDir = func() (string, error) { return maskDir, maskDirErr }
 
 	// Pass 1: scan every file (in parallel) into its own registry, then
 	// merge the registries in sorted-path order -- the same token numbering
@@ -354,23 +358,43 @@ func scanFile(p *Pipeline, in *inputFile, env *runEnv) (int64, error) {
 	}
 	defer df.close()
 
-	lineCount, err := processChunks(df.lr, env,
+	// The mask sidecar is only an optimization: without one, Pass 2 runs
+	// every detector.
+	var mw *maskWriter
+	if env.tmpDir != nil {
+		if dir, err := env.tmpDir(); err == nil {
+			mw, _ = newMaskWriter(dir)
+		}
+	}
+	lineCount, err := processChunks(df.lr, env, nil,
 		func(c *chunk) {
 			f := p.forkForScan()
-			for _, it := range c.lines {
+			c.masks = make([]DetectorMask, len(c.lines))
+			for i, it := range c.lines {
 				// Lines inside a PEM key block are wholesale-redacted in
 				// Pass 2, so their contents are never scanned into the
 				// registry.
 				if !it.pem {
-					f.ScanLine(it.text)
+					c.masks[i] = f.ScanLineMask(it.text)
 				}
 			}
+			c.hash = chunkHash(env.seed, c)
 			c.reg = f.Registry
 		},
 		func(c *chunk) error {
 			p.Registry.Merge(c.reg)
+			if mw != nil {
+				mw.writeChunk(c)
+			}
 			return nil
 		})
+	if mw != nil {
+		if path, cerr := mw.close(); cerr == nil && err == nil {
+			in.masks = path
+		} else if cerr != nil {
+			env.log.Verbose("%s: detector-mask sidecar not used: %v", rel, cerr)
+		}
+	}
 	if err != nil {
 		return 0, fmt.Errorf("reading lines from %s: %w", path, err)
 	}
@@ -421,10 +445,22 @@ func replaceFile(p *Pipeline, in *inputFile, env *runEnv, scanner *audit.Scanner
 		}
 	}
 
-	_, err = processChunks(df.lr, env,
+	var prepare func(*chunk)
+	if in.masks != "" {
+		mr, err := openMaskReader(in.masks)
+		if err == nil {
+			defer func() { mr.close(); os.Remove(in.masks) }()
+			prepare = mr.readChunk
+		}
+	}
+	_, err = processChunks(df.lr, env, prepare,
 		func(c *chunk) {
 			f := p.forkForReplace()
 			c.out = make([]string, len(c.lines))
+			masks := c.masks
+			if masks != nil && chunkHash(env.seed, c) != c.wantHash {
+				masks = nil // not the chunk Pass 1 saw: run every detector
+			}
 			for i, it := range c.lines {
 				// A line inside a PEM key block is redacted whole -- the
 				// multi-line key body is invisible to the per-line
@@ -433,6 +469,8 @@ func replaceFile(p *Pipeline, in *inputFile, env *runEnv, scanner *audit.Scanner
 				if it.pem {
 					c.out[i] = SecretPlaceholder
 					f.CountLineRedaction()
+				} else if masks != nil {
+					c.out[i] = f.ReplaceLineMasked(it.text, masks[i])
 				} else {
 					c.out[i] = f.ReplaceLine(it.text)
 				}

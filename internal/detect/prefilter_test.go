@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,8 +78,59 @@ func TestQueryParamGatesAreConservative(t *testing.T) {
 	}
 }
 
+func TestBareUserPrefilter(t *testing.T) {
+	for _, line := range []string{
+		"user=jdoe", "USERID = 'x'", "username:\tbob", "metauser=sas1", "Authenticated user: jdoe", "uid = alice",
+		"xuser=1", "the userName  =z", "uid=1001(sas)", "ſomething user=x",
+	} {
+		if !(BareUserDetector{}).MightMatch(line) {
+			t.Errorf("prefilter rejects %q", line)
+		}
+	}
+	for _, line := range []string{"user sasdemo logged in", "users: 3", "uidx=1", "the user, uid 7", ""} {
+		if len((BareUserDetector{}).Detect(line)) > 0 {
+			t.Errorf("unexpected Detect match on %q", line)
+		}
+	}
+	if (BareUserDetector{}).MightMatch("user sasdemo logged in from host") {
+		t.Error("prefilter passes a line with no user=/user: assignment")
+	}
+}
+
 func TestDNPrefilterSkipsTimestampCommas(t *testing.T) {
 	if (DNDetector{}).MightMatch("2026-11-10T12:00:00,123 INFO user=u1 rc=0") {
 		t.Error("DN prefilter passes a line whose only comma is in the timestamp")
+	}
+}
+
+// The Authorization / Cookie gates may only skip lines where their rules
+// match nothing: checked on the fixture corpus and on random lines built
+// from the patterns' pieces.
+func TestHeaderNameGatesAreConservative(t *testing.T) {
+	check := func(line string) {
+		t.Helper()
+		l := asciiLower(line)
+		if len(authorizationValues(line)) > 0 && !headerNameGate(line, l, "authorization") {
+			t.Errorf("authorization gate rejects %q", line)
+		}
+		if len(cookieValues(line)) > 0 && !headerNameGate(line, l, "cookie") {
+			t.Errorf("cookie gate rejects %q", line)
+		}
+	}
+	for _, line := range prefilterCorpus(t) {
+		check(line)
+	}
+	frags := []string{"Authorization", "authorization", "Proxy-", "Cookie", "Set-", "cookie", "\"", ":", ",", " ", "\t",
+		"name", "value", "{", "}", "Basic abc", "x", "=", "K", "\u212a"}
+	r := rand.New(rand.NewSource(5))
+	for i := 0; i < 50000 && !t.Failed(); i++ {
+		var sb strings.Builder
+		for n := r.Intn(10); n >= 0; n-- {
+			sb.WriteString(frags[r.Intn(len(frags))])
+		}
+		check(sb.String())
+	}
+	if headerNameGate("x com.sas.svcs.authorization.AuthorizationService y", "x com.sas.svcs.authorization.authorizationservice y", "authorization") {
+		t.Error("gate passes a class name")
 	}
 }

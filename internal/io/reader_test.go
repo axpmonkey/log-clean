@@ -3,6 +3,7 @@ package io
 import (
 	"bytes"
 	"io"
+	"math/rand"
 	"strings"
 	"testing"
 )
@@ -174,5 +175,35 @@ func TestLineWriterNoneEndingWritesNoTerminator(t *testing.T) {
 	lw.Flush()
 	if buf.String() != "a\r\nb" {
 		t.Errorf("got %q, want %q (no trailing newline on final line)", buf.String(), "a\r\nb")
+	}
+}
+
+// The single-byte-newline fast path must return exactly what the general
+// byte-at-a-time loop does, across buffer-boundary-spanning lines, CR/LF
+// mixes and a missing final terminator.
+func TestReadLineFastPathMatchesBytewise(t *testing.T) {
+	r := rand.New(rand.NewSource(4))
+	pieces := []string{"a", "bc", "\n", "\r\n", "\r", "\r\r\n", "é", "\x00", strings.Repeat("x", 70000), ""}
+	for round := 0; round < 300; round++ {
+		var sb strings.Builder
+		for k := r.Intn(20); k >= 0; k-- {
+			sb.WriteString(pieces[r.Intn(len(pieces))])
+		}
+		in := sb.String()
+		for _, enc := range []Encoding{UTF8, Windows1252} {
+			fast := NewLineReader(strings.NewReader(in), enc)
+			slow := NewLineReader(strings.NewReader(in), enc)
+			nl, cr := enc.newlineBytes()
+			for {
+				l1, e1, err1 := fast.ReadLine()
+				l2, e2, err2 := slow.readLineBytewise(nl, cr)
+				if l1 != l2 || e1 != e2 || (err1 == nil) != (err2 == nil) {
+					t.Fatalf("enc %v input %q: fast (%q,%v,%v) vs bytewise (%q,%v,%v)", enc, in, l1, e1, err1, l2, e2, err2)
+				}
+				if err1 != nil {
+					break
+				}
+			}
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/pprof"
 	"strings"
 
 	"sas-log-sanitize/internal/audit"
@@ -38,6 +39,7 @@ type flags struct {
 	keepHARBodies, ipClass                                         bool
 	verbose, quiet, dryRun                                         bool
 	showVersion, showHelp                                          bool
+	cpuProfile                                                     string
 
 	// Config-file-only detector overrides (no CLI flag): populated by
 	// applyConfigFile from the config's detectors section.
@@ -78,6 +80,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "show what would be replaced, write nothing")
 	fs.BoolVar(&f.showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&f.showHelp, "help", false, "show usage")
+	fs.StringVar(&f.cpuProfile, "cpuprofile", "", "write a Go CPU profile to this file (for performance work)")
 
 	if err := fs.Parse(args); err != nil {
 		return exitConfigError
@@ -96,6 +99,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if code := applyConfigFile(&f, fs, stderr); code != exitOK {
 			return code
 		}
+	}
+
+	if f.cpuProfile != "" {
+		pf, err := os.Create(f.cpuProfile)
+		if err != nil {
+			fmt.Fprintf(stderr, "sas-log-sanitize: creating CPU profile: %v\n", err)
+			return exitConfigError
+		}
+		if err := pprof.StartCPUProfile(pf); err != nil {
+			pf.Close()
+			fmt.Fprintf(stderr, "sas-log-sanitize: starting CPU profile: %v\n", err)
+			return exitConfigError
+		}
+		defer func() { pprof.StopCPUProfile(); pf.Close() }()
 	}
 
 	switch {

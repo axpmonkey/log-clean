@@ -58,6 +58,15 @@ func (e Encoding) newlineBytes() (nl, cr []byte) {
 // next call, matching bufio.Scanner-like semantics but without its size limit.
 func (lr *LineReader) ReadLine() (line string, ending LineEnding, err error) {
 	nl, cr := lr.enc.newlineBytes()
+	if len(nl) == 1 {
+		return lr.readLineByte(nl[0], cr[0])
+	}
+	return lr.readLineBytewise(nl, cr)
+}
+
+// readLineBytewise is the general ReadLine loop, for multi-byte newlines
+// (UTF-16).
+func (lr *LineReader) readLineBytewise(nl, cr []byte) (line string, ending LineEnding, err error) {
 	var buf []byte
 	for {
 		b, readErr := lr.br.ReadByte()
@@ -91,6 +100,55 @@ func (lr *LineReader) ReadLine() (line string, ending LineEnding, err error) {
 			}
 			return decoded, ending, nil
 		}
+	}
+}
+
+// readLineByte is ReadLine for encodings whose newline is a single byte
+// (UTF-8, Windows-1252): bufio's ReadSlice finds the terminator with one
+// IndexByte scan instead of a ReadByte call per byte. Same results as the
+// byte loop, including the MaxLineBytes limit (counted with the newline).
+func (lr *LineReader) readLineByte(nl, cr byte) (string, LineEnding, error) {
+	var buf []byte
+	for {
+		frag, readErr := lr.br.ReadSlice(nl)
+		if readErr == bufio.ErrBufferFull {
+			buf = append(buf, frag...)
+			if len(buf) > MaxLineBytes {
+				return "", LF, fmt.Errorf("line exceeds maximum buffer size of %d bytes", MaxLineBytes)
+			}
+			continue
+		}
+		// frag is only valid until the next read; decode copies it.
+		line := frag
+		if buf != nil {
+			buf = append(buf, frag...)
+			line = buf
+		}
+		if len(line) > MaxLineBytes {
+			return "", LF, fmt.Errorf("line exceeds maximum buffer size of %d bytes", MaxLineBytes)
+		}
+		if readErr != nil {
+			if len(line) > 0 {
+				// Trailing bytes with no terminator: the file's final line.
+				decoded, decErr := lr.decode(line)
+				if decErr != nil {
+					return "", None, decErr
+				}
+				return decoded, None, nil
+			}
+			return "", None, readErr
+		}
+		body := line[:len(line)-1]
+		ending := LF
+		if len(body) > 0 && body[len(body)-1] == cr {
+			ending = CRLF
+			body = body[:len(body)-1]
+		}
+		decoded, decErr := lr.decode(body)
+		if decErr != nil {
+			return "", LF, decErr
+		}
+		return decoded, ending, nil
 	}
 }
 

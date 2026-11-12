@@ -256,7 +256,7 @@ func NewFQDNDetectorWithExtraTLDs(extra []string) FQDNDetector {
 func (FQDNDetector) Name() string { return "fqdn" }
 
 func (d FQDNDetector) Detect(line string) []Match {
-	locs := fqdnPattern.FindAllStringIndex(line, -1)
+	locs := FindFQDNCandidates(line) // fqdnPattern
 	if locs == nil {
 		return nil
 	}
@@ -353,7 +353,7 @@ type MACDetector struct{}
 func (MACDetector) Name() string { return "mac" }
 
 func (MACDetector) Detect(line string) []Match {
-	locs := macPattern.FindAllStringIndex(line, -1)
+	locs := FindMACs(line) // macPattern
 	if locs == nil {
 		return nil
 	}
@@ -401,7 +401,7 @@ type URLDetector struct {
 func (URLDetector) Name() string { return "url" }
 
 func (d URLDetector) Detect(line string) []Match {
-	locs := urlPattern.FindAllStringIndex(line, -1)
+	locs := findURLs(line) // urlPattern
 	if locs == nil {
 		return nil
 	}

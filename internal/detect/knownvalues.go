@@ -149,9 +149,15 @@ func AuditValues(byCategory map[string][]string) []KnownValue {
 type KnownValuesDetector struct {
 	// byLower maps an ASCII-lowercased value to its entry.
 	byLower map[string]KnownValue
-	// wordStartLens are the distinct lengths, longest first, of values that
-	// begin with a word character; each is tried at every word start.
-	wordStartLens []int
+	// prefixLens maps the first two bytes of the values that begin with a
+	// word character (and are 2+ bytes long) to their distinct lengths,
+	// longest first; prefixSeen is a bitset of its keys. At a word start
+	// only the lengths of values sharing the next two bytes are tried, so
+	// most word starts cost one bit test instead of a hash per length.
+	prefixLens map[uint16][]int
+	prefixSeen [1 << 16 / 64]uint64
+	// oneByte marks single-byte word values (tried last: shortest).
+	oneByte [256]bool
 	// otherStart are lowercased values beginning with a non-word character
 	// (e.g. a UNC path), found by substring search; longest first.
 	otherStart []string
@@ -169,24 +175,36 @@ func NewKnownValuesDetector(values []KnownValue) *KnownValuesDetector {
 	if len(values) == 0 {
 		return nil
 	}
-	d := &KnownValuesDetector{byLower: make(map[string]KnownValue, len(values))}
-	lens := map[int]bool{}
+	d := &KnownValuesDetector{byLower: make(map[string]KnownValue, len(values)), prefixLens: map[uint16][]int{}}
+	lens := map[uint16]map[int]bool{}
 	for _, v := range values {
 		key := asciiLower(v.Text)
 		if _, dup := d.byLower[key]; dup || key == "" {
 			continue
 		}
 		d.byLower[key] = v
-		if isWordByte(key[0]) {
-			lens[len(key)] = true
-		} else {
+		switch {
+		case !isWordByte(key[0]):
 			d.otherStart = append(d.otherStart, key)
+		case len(key) == 1:
+			d.oneByte[key[0]] = true
+		default:
+			p := prefix2(key, 0)
+			if lens[p] == nil {
+				lens[p] = map[int]bool{}
+			}
+			lens[p][len(key)] = true
 		}
 	}
-	for l := range lens {
-		d.wordStartLens = append(d.wordStartLens, l)
+	for p, set := range lens {
+		ls := make([]int, 0, len(set))
+		for l := range set {
+			ls = append(ls, l)
+		}
+		sort.Sort(sort.Reverse(sort.IntSlice(ls)))
+		d.prefixLens[p] = ls
+		d.prefixSeen[p/64] |= 1 << (p % 64)
 	}
-	sort.Sort(sort.Reverse(sort.IntSlice(d.wordStartLens)))
 	sort.SliceStable(d.otherStart, func(i, j int) bool { return len(d.otherStart[i]) > len(d.otherStart[j]) })
 	return d
 }
@@ -231,16 +249,9 @@ func (d *KnownValuesDetector) Detect(line string) []Match {
 		if !isWordByte(lower[i]) || (i > 0 && isWordByte(lower[i-1])) {
 			continue
 		}
-		for _, l := range d.wordStartLens {
-			e := i + l
-			if e > len(lower) {
-				continue
-			}
-			if v, ok := d.byLower[lower[i:e]]; ok && endsOnBoundary(lower, e) {
-				emit(i, e, v)
-				i = e - 1
-				break
-			}
+		if e, ok := d.matchWordStart(lower, i); ok {
+			emit(i, e, d.byLower[lower[i:e]])
+			i = e - 1
 		}
 	}
 	for _, key := range d.otherStart {
@@ -257,6 +268,30 @@ func (d *KnownValuesDetector) Detect(line string) []Match {
 		}
 	}
 	return matches
+}
+
+func prefix2(s string, i int) uint16 { return uint16(s[i])<<8 | uint16(s[i+1]) }
+
+// matchWordStart returns the end of the longest known value starting at
+// word start i of lower that ends on a word boundary.
+func (d *KnownValuesDetector) matchWordStart(lower string, i int) (int, bool) {
+	if i+1 < len(lower) {
+		if p := prefix2(lower, i); d.prefixSeen[p/64]&(1<<(p%64)) != 0 {
+			for _, l := range d.prefixLens[p] {
+				e := i + l
+				if e > len(lower) {
+					continue
+				}
+				if _, ok := d.byLower[lower[i:e]]; ok && endsOnBoundary(lower, e) {
+					return e, true
+				}
+			}
+		}
+	}
+	if d.oneByte[lower[i]] && endsOnBoundary(lower, i+1) {
+		return i + 1, true
+	}
+	return 0, false
 }
 
 // FindAll returns the spans of every known value in line, for the audit

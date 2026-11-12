@@ -176,3 +176,9 @@ file's values. Detector overrides:
 `--dry-run` runs both passes and computes accurate stats/findings, but
 writes nothing to the output directory -- useful for previewing what a run
 would do before committing to it.
+
+## Profiling
+
+`--cpuprofile <file>` writes a Go CPU profile of the run, for performance
+work: `go tool pprof -top sas-log-sanitize <file>` lists where the time
+went. It has no effect on output.

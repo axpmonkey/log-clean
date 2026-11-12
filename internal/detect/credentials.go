@@ -97,10 +97,10 @@ func (CredentialsDetector) Detect(line string) []Match {
 	// running all of them on every line was the largest CPU cost in a
 	// profile of a dense bundle. The gates never change what matches.
 	l := asciiLower(line)
-	if strings.Contains(l, "authorization") {
+	if headerNameGate(line, l, "authorization") {
 		matches = append(matches, authorizationValues(line)...)
 	}
-	if strings.Contains(l, "cookie") {
+	if headerNameGate(line, l, "cookie") {
 		matches = append(matches, cookieValues(line)...)
 	}
 	if strings.Contains(l, "x-") {

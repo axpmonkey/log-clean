@@ -46,7 +46,25 @@ type Pipeline struct {
 	// field. This is occurrence counts, not unique-value counts -- that's
 	// what Registry.Count already provides.
 	replacementCounts map[string]int
+
+	// scanDetectors is how many of Detectors Pass 1 ran: everything before
+	// the known-values sweep EnableKnownValuesSweep appends. Only those
+	// detectors appear in a DetectorMask. sweepEnabled is set with it.
+	scanDetectors int
+	sweepEnabled  bool
 }
+
+// DetectorMask records which detectors returned at least one candidate on
+// a line (bit k for Detectors[k], k < 32). Detectors are pure functions of
+// the line, so in Pass 2 a detector whose bit is clear would find nothing
+// again on the same line and can be skipped without changing any claim.
+// Pass 1 records each line's mask (see maskSidecar) so Pass 2 runs only the
+// detectors that matter plus the known-values sweep.
+type DetectorMask = uint32
+
+// AllDetectors runs every detector: the mask for lines with no Pass 1
+// record.
+const AllDetectors DetectorMask = ^DetectorMask(0)
 
 // New creates a Pipeline with detectors run in the given order.
 func New(detectors []detect.Detector) *Pipeline {
@@ -84,6 +102,7 @@ func (p *Pipeline) ReplacementCounts() map[string]int {
 // swept values (nil when there are none).
 func (p *Pipeline) EnableKnownValuesSweep() []detect.KnownValue {
 	values := detect.SweepValues(p.Registry.Values("USER"), p.Registry.Values("HOST"))
+	p.scanDetectors, p.sweepEnabled = len(p.Detectors), true
 	if d := detect.NewKnownValuesDetector(values); d != nil {
 		p.Detectors = append(p.Detectors, d)
 	}
@@ -95,13 +114,33 @@ func (p *Pipeline) EnableKnownValuesSweep() []detect.KnownValue {
 // detector, and returns the accepted matches in claim order (not
 // necessarily left-to-right position order).
 func (p *Pipeline) walk(line string) []detect.Match {
+	accepted, _ := p.walkMasked(line, AllDetectors)
+	return accepted
+}
+
+// walkMasked is walk, skipping each detector k < scanDetectors (and < 32)
+// whose bit in mask is clear. It also returns the mask of detectors that
+// produced at least one candidate.
+func (p *Pipeline) walkMasked(line string, mask DetectorMask) ([]detect.Match, DetectorMask) {
 	state := detect.NewLineState()
 	var accepted []detect.Match
-	for _, d := range p.Detectors {
+	var found DetectorMask
+	maskable := len(p.Detectors)
+	if p.sweepEnabled {
+		maskable = p.scanDetectors // the sweep always runs
+	}
+	for k, d := range p.Detectors {
+		if k < maskable && k < 32 && mask&(1<<k) == 0 {
+			continue
+		}
 		if pf, ok := d.(detect.Prefilter); ok && !pf.MightMatch(line) {
 			continue
 		}
-		for _, m := range d.Detect(line) {
+		cands := d.Detect(line)
+		if len(cands) > 0 && k < 32 {
+			found |= 1 << k
+		}
+		for _, m := range cands {
 			if state.IsProtected(m.Span.Start, m.Span.End) {
 				continue
 			}
@@ -119,7 +158,7 @@ func (p *Pipeline) walk(line string) []detect.Match {
 			accepted = append(accepted, m)
 		}
 	}
-	return accepted
+	return accepted, found
 }
 
 // shouldIgnore reports whether the ignore list suppresses match m. It is

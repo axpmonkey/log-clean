@@ -33,6 +33,9 @@ type inputFile struct {
 	// har is set by Pass 1 when the file parsed as a HAR, so Pass 2 streams
 	// it through the HAR handler too.
 	har bool
+	// masks is Pass 1's detector-mask sidecar for Pass 2 ("" = none; Pass
+	// 2 then runs every detector on every line).
+	masks string
 }
 
 // discovery walks the input and collects files to process.

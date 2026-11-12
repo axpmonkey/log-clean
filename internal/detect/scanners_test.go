@@ -47,6 +47,9 @@ func checkScanners(t *testing.T, line string) {
 	same("findDottedQuads strict", findDottedQuads(line, true), regexSpans(ipv4Pattern.FindAllStringIndex(line, -1)))
 	same("findDottedQuads loose", findDottedQuads(line, false), regexSpans(looseDottedQuad.FindAllStringIndex(line, -1)))
 	same("findUUIDs", findUUIDs(line), regexSpans(uuidPattern.FindAllStringIndex(line, -1)))
+	same("FindFQDNCandidates", FindFQDNCandidates(line), regexSpans(fqdnPattern.FindAllStringIndex(line, -1)))
+	same("FindMACs", FindMACs(line), regexSpans(macPattern.FindAllStringIndex(line, -1)))
+	same("findURLs", findURLs(line), regexSpans(urlPattern.FindAllStringIndex(line, -1)))
 	same("findCASTickets", findCASTickets(line), regexSpans(casTicketPattern.FindAllStringIndex(line, -1)))
 
 	var core [][2]int
@@ -87,6 +90,14 @@ var scannerFragments = []string{
 	"=", "?", "&", ";", "#", ",", ")", "<", ">", "\"", "'", "x_", "1",
 	// version keywords
 	"v", "V", "version", "Release", "sas", "SAS", "xsas", ": ", " = ", "::",
+	// fqdn labels and tlds
+	"com", "COM", "x", "ab", "a-b", "-a", "a-", "host01", "sas.example.com", "a.b", "a.b.c", ".com", "_x", "x1",
+	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	// urls
+	"://", "http", "https", "ftp", "sftp", "ftps", "jdbc:", "jdbc:postgresql", "jdbc:x:", "tcp", "ssl", "nio", "amqp", "amqps",
+	"mqtt", "ldap", "ldaps", "xhttp", "HTTP", "http://host:80/p?q=1", "<", ">", "/", "jdbc:sqlserver://h;db=x",
+	// mac addresses
+	"00:1A:2b:3C:4d:5E", "00-1a-2b-3c-4d-5e", "00:1A-2B:3C-4D:5E", "00:1A:2B:3C:4D", "0:1A", "AB", "ab:", "cd-",
 	// spacing and non-ASCII
 	" ", "  ", "\t", "\r", "\n", "\f", "\v", "é", "ſ", "K",
 }
@@ -106,6 +117,7 @@ func TestScannersMatchRegexps(t *testing.T) {
 		"GET /SASLogon/app?ticket=ST-12-abc&code=xyz;state=s1&token=t2 HTTP/1.1",
 		"ticket=a=ticket=b ticket= ticket=c", "x?code=1&&code=2", "SAMLResponse=PHN&RelayState=r",
 		"member 550e8400-e29b-41d4-a716-446655440000, id=ABCDEF01-2345-6789-abcd-ef0123456789x",
+		"host sas01.corp.example.com:8343 a.bb.c1 a.b.cc.dd x_y.com -Dcatalina.home=/x 1.2.3.com",
 		"addr fe80::1%eth0 at 12:00:00,123", "TGT-1-abc-cas01.example.com", "_ST-1-a ST-1- ST--1-a",
 	}
 	for _, line := range fixed {

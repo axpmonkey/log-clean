@@ -21,7 +21,13 @@ func (p *Pipeline) ReplaceText(s string) string {
 // not Redact) are left in place in the output -- their only purpose is to
 // occupy a span so later detectors skip it (e.g. UUIDs, per Decision 6).
 func (p *Pipeline) ReplaceLine(line string) string {
-	matches := p.walk(line)
+	return p.ReplaceLineMasked(line, AllDetectors)
+}
+
+// ReplaceLineMasked is ReplaceLine running only the detectors in mask (the
+// line's Pass 1 DetectorMask) plus the known-values sweep.
+func (p *Pipeline) ReplaceLineMasked(line string, mask DetectorMask) string {
+	matches, _ := p.walkMasked(line, mask)
 	if len(matches) == 0 {
 		return line
 	}

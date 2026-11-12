@@ -48,8 +48,11 @@ func (lw *LineWriter) WriteBOM() error {
 // stream would corrupt the output). A None ending writes no terminator at
 // all, reproducing a final line that had no trailing newline in the source.
 func (lw *LineWriter) WriteLine(line string, ending LineEnding) error {
-	encoded := lw.encode(line)
-	if _, err := lw.bw.Write(encoded); err != nil {
+	if lw.enc == UTF8 {
+		if _, err := lw.bw.WriteString(line); err != nil { // no []byte copy
+			return err
+		}
+	} else if _, err := lw.bw.Write(lw.encode(line)); err != nil {
 		return err
 	}
 	nl, cr := lw.enc.newlineBytes()

@@ -71,7 +71,9 @@ levels, without changing any result:
   by the workers.
 
 A semaphore caps CPU-bound work at `--workers` (default one per CPU) across
-all files, and each file has a bounded window of in-flight chunks. Audit
+all files, and each file has a bounded window of in-flight chunks (four per
+worker, so one slow chunk -- e.g. on an efficiency core of a hybrid CPU --
+doesn't stall the in-order emitter while other workers sit idle). Audit
 findings and replacement counts are collected per file/chunk and combined in
 input order, so `_audit.txt` and `_summary.*` are identical for any worker
 count. Progress (files, MB, MB/s, ETA) goes to stderr.
@@ -85,11 +87,36 @@ rules have the same kind of gate (`TestAuditGatesAreConservative`).
 
 The patterns that run on nearly every line -- dotted quads (detector and
 audit rule), UUIDs, IPv6 candidate runs, CAS tickets, credential query
-parameters and the version-keyword check -- are hand-written scanners
-(`internal/detect/scanners.go`) instead of regexes. Each returns exactly
-what its regex would; the regexes stay in the source as the reference, and
-`TestScannersMatchRegexps` / `FuzzScanners` compare the two on random
-input.
+parameters, the version-keyword check, FQDN candidates (detector and audit
+rule), MAC addresses (detector and audit rule) and URLs -- are hand-written
+scanners (`internal/detect/scanners.go`) instead of regexes, as are the
+audit's hostname-shaped and server-suffix word rules
+(`internal/audit/scanners.go`). Each returns exactly what its regex would;
+the regexes stay in the source as the reference, and
+`TestScannersMatchRegexps` / `FuzzScanners` and
+`TestAuditScannersMatchRegexps` / `FuzzAuditScanners` compare the two on
+random input.
+
+The known-values sweep indexes its values by their first two (lowercased)
+bytes, so at most word starts it does one bit test instead of a hash lookup
+per distinct value length (`TestKnownValuesIndexMatchesReference` compares
+it with the plain all-lengths matcher).
+
+**Pass 2 skips detectors that found nothing in Pass 1.** Detectors are pure
+functions of the line, so a detector with no candidates on a line in Pass 1
+has none on the same line in Pass 2. Pass 1 records each line's
+`DetectorMask` (one bit per detector that returned a candidate) in a
+per-file sidecar in the run's temporary directory -- a chunk-by-chunk
+stream of line count, chunk hash and one uvarint per line (usually one
+byte), so memory still doesn't grow with file size -- and Pass 2 runs only
+those detectors plus the known-values sweep (`ReplaceLineMasked`). A chunk
+whose line count or hash differs from Pass 1's (a file that changed between
+passes), or a sidecar that can't be written or read, falls back to running
+every detector, never fewer. `TestMaskedReplaceMatchesFullWalk` checks that
+masked and full Pass 2 output agree on every fixture line.
+
+To profile a run, pass `--cpuprofile cpu.prof` and inspect it with
+`go tool pprof -top <binary> cpu.prof`.
 
 ## HAR files
 

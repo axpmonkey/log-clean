@@ -170,7 +170,8 @@ func NewScanner() *Scanner {
 			gate:    func(line, _ string) bool { return strings.IndexByte(line, '@') >= 0 }},
 
 		{name: "mac-shape", severity: SeverityHigh,
-			pattern: regexp.MustCompile(`\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b`),
+			// \b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b, hand-written for speed.
+			find: detect.FindMACs,
 			gate: func(line, _ string) bool {
 				return strings.Count(line, ":")+strings.Count(line, "-") >= 5
 			}},
@@ -181,7 +182,7 @@ func NewScanner() *Scanner {
 		// English words like "instead". Medium severity, not gated by
 		// --strict, exactly because of that noise.
 		{name: "hostname-shaped-bare-word", severity: SeverityMedium,
-			pattern:  regexp.MustCompile(`(?i)\b[a-z][a-z0-9-]*-?(?:prod|dev|uat|qa|stage|stg|dr|test)[0-9]*\b`),
+			find:     findHostnameShapedWords, // hostnameShapedPattern
 			suppress: suppressOwnTokenFragment,
 			gate: func(line, lower string) bool {
 				return containsAny(lower, "prod", "dev", "uat", "qa", "stage", "stg", "dr", "test") || hasNonASCII(line)
@@ -193,7 +194,7 @@ func NewScanner() *Scanner {
 		// keeps it from matching "IPV4"/"IPV6" inside our own IPV4_NNN /
 		// IPV6_NNN tokens.
 		{name: "server-suffix-bare-word", severity: SeverityMedium,
-			pattern: regexp.MustCompile(`(?i)\b[a-z]+[0-9]+(?:-(?:srv|server|host|node|db|web|app|mq))?\b`),
+			find: findServerSuffixWords, // serverSuffixPattern
 			suppress: func(line string, start, end int) bool {
 				return suppressOwnTokenFragment(line, start, end) || isKnownNonPIIWord(line, start, end)
 			},
@@ -251,14 +252,14 @@ func (s *Scanner) ScanLine(file string, lineNum int, line string) []Finding {
 	return findings
 }
 
-// fqdnCandidatePattern mirrors the FQDN detector's regex shape; candidates
-// are then filtered through detect.IsValidFQDN's TLD allowlist by
-// findValidFQDNs, the same two-step validation the real detector uses.
-var fqdnCandidatePattern = regexp.MustCompile(`\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b`)
+// findValidFQDNs uses the FQDN detector's own candidate scanner
+// (detect.FindFQDNCandidates, the hand-written form of its regex), then
+// filters through detect.IsValidFQDN's TLD allowlist -- the same two-step
+// validation the real detector uses.
 
 func findValidFQDNs(line string, ignore detect.IgnoreList) [][2]int {
 	var out [][2]int
-	for _, loc := range fqdnCandidatePattern.FindAllStringIndex(line, -1) {
+	for _, loc := range detect.FindFQDNCandidates(line) {
 		if detect.IsJVMSystemPropertyKey(line, loc[0]) {
 			continue
 		}
