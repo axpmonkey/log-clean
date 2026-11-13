@@ -1,104 +1,80 @@
-# Usage guide
+# Command-line reference
 
-## Sanitize mode (default)
+```text
+sas-log-sanitize -i <input> [-o <output>] [flags]          sanitize (default mode)
+sas-log-sanitize --reverse <mapping-file> <text-or-file>    reverse tokens
+sas-log-sanitize --audit-only <sanitized-dir> [flags]       re-audit output
+sas-log-sanitize --version | --help
+```
+
+Flags can go before or after positional arguments. They take one or two
+dashes (`-input` and `--input` are the same), and values can follow a space or
+`=` (`--url-mode whole`, `--url-mode=whole`). A bare `--` ends flag parsing:
+everything after it is positional, even if it starts with `-`.
+
+In reverse mode, everything after the mapping file is taken as literal text,
+so the text you reverse can start with `-`.
+
+## Sanitize mode
 
 ```sh
-sas-log-sanitize -i /path/to/log-bundle -o /path/to/output
-sas-log-sanitize -i /path/to/single.log -o /path/to/output
+sas-log-sanitize -i case-12345.zip -o case-12345-clean
 ```
 
-`input` may be a directory (walked recursively, alphabetically by output
-path -- this matters: token numbering depends on file processing order being
-deterministic), a single file, or a `.zip`/`.tar`/`.tar.gz`/`.tgz` bundle.
-Archives (as the input or anywhere inside it) are extracted to a private
-temporary directory and their files written under a folder named after the
-archive (`bundle.zip` -> `<output>/bundle/...`). Unsafe entries (absolute or
-`..` paths, symlinks) and archives inside archives are skipped and listed.
-Rotated `*.gz` logs are read decompressed and written back gzipped under the
-same name. For each file:
+`-i` is optional. You can pass the input as the first positional argument instead.
 
-1. Skipped if its extension is in the binary-extension allowlist, or if its
-   content looks binary (>30% non-printable bytes in the first 512 bytes).
-   Skipped files are listed at the top of `_summary.txt` and printed at the
-   end of the run.
-2. Otherwise, encoding is detected from the first 64 KB (UTF-8 BOM, UTF-16
-   LE/BE BOM, or no BOM -- assumed UTF-8, falling back to Windows-1252 only
-   if the sample isn't valid UTF-8). Files are streamed, so memory doesn't
-   grow with file size.
-3. Pass 1 scans every line and registers every detected, non-secret value in
-   the token registry.
-4. Pass 2 replaces every detected value with its token and writes the
-   sanitized file to the output directory, preserving the original relative
-   path, encoding, and line-ending style (CRLF/LF).
+### Input and output
 
-Both passes run files -- and chunks of each large file -- in parallel
-(`--workers`, default one per CPU), with results combined in input order, so
-output and token numbering are identical for any worker count. Progress
-(files, MB, MB/s, ETA) is printed to stderr unless `-q` is given.
+| Flag | Default | Description |
+|---|---|---|
+| `-i`, `--input` | *(required)* | A directory, a single file, or a `.zip`, `.tar`, `.tar.gz`, or `.tgz` archive. |
+| `-o`, `--output` | `<input>-sanitized` | Output directory. It's created if it doesn't exist. |
+| `-m`, `--mapping` | `<output>.mapping.json` | Where to write the mapping file. It must be outside the output directory. |
+| `--allow-mapping-in-output` | off | Allow `--mapping` to point inside the output directory. Not recommended. |
+| `--config` | none | A YAML [configuration file](config.md). Flags on the command line override it. |
+| `--dry-run` | off | Run both passes and report statistics and findings, but write nothing. |
 
-After both passes: the audit report (`_audit.txt`, if `--audit` is on), a
-per-category replacement summary (`_summary.txt`, plus the same data as
-`_summary.json` for other tools: counts by category, skipped files with
-reasons, audit counts by severity, and the exit status), and a runlog
-(`_runlog.txt`) are written to the output directory.
+### Detection
 
-URLs keep their scheme, port, path and parameter names; only the userinfo
-and host are tokenized (`https://HOST_001:8343/SASLogon/login?ticket=SECRET_REDACTED`).
-`--url-mode=whole` restores the old one-token-per-URL behavior.
+| Flag | Default | Description |
+|---|---|---|
+| `--hostlist` | none | A file of hostnames to always tokenize, matched as literal substrings. See [Tune detection](../guides/tune-detection.md#always-tokenize-a-hostname). |
+| `--ignorelist` | none | A file of hostnames or `*.domain` wildcards to never tokenize. |
+| `--profiles` | `auto` | A comma-separated list of [profiles](config.md#profiles), or `auto` for all of them. |
+| `--url-mode` | `host` | `host` replaces only a URL's user information and host. `whole` replaces the entire URL with a single `URL_NNN` token. |
+| `--ip-class` | off | Tokenize IPv4 addresses as `IPV4_PRIV_NNN` or `IPV4_PUB_NNN`. |
+| `--keep-har-bodies` | off | Keep HAR response bodies, after scanning them, instead of dropping them. |
 
-HAR files (`*.har`, or `*.json` starting with a top-level `"log"` key) are
-processed as JSON, streamed entry by entry so memory doesn't grow with file
-size (`*.har.gz` too): credential headers (Authorization, Cookie, Set-Cookie,
-CSRF/token headers) and cookie values are redacted whole, credential query
-parameters are redacted, response bodies are dropped unless
-`--keep-har-bodies` is given, and every other string goes through the normal
-detectors. Timings, sizes, status codes, methods and header names are left
-untouched, and the output is valid JSON. A HAR that doesn't parse falls back
-to line-based sanitization (noted in the runlog). The mapping file is
-written next to it, at `<output>.mapping.json` (override with `--mapping`;
-a path inside the output directory is refused unless
-`--allow-mapping-in-output` is passed).
+### Audit
 
-Between the passes, every USER and HOST value found anywhere in the bundle
-(plus each host's short name, e.g. `pghost01` for
-`pghost01.corp.example.com`) is swept out of every line of every file in
-Pass 2, with the same token -- so a value found once is gone everywhere.
-Short values and common words are not swept.
+| Flag | Default | Description |
+|---|---|---|
+| `--audit` | `true` | Run the audit pass on the output. To turn it off, use `--audit=false`. |
+| `--strict` | off | Exit `1` on Medium findings too. High findings always exit `1`. |
 
-Hostnames, Windows domains and email addresses are case-insensitive:
-`SASMID01.corp.example.com` and `sasmid01.corp.example.com` share one token
-(the mapping keeps the spelling seen first). Usernames stay case-sensitive.
+### Performance and logging
 
-Oracle thin JDBC URLs (`jdbc:oracle:thin:@host:1521:SID`,
-`@//host:1521/service`, `user/password@host`) and TNS descriptors
-(`(HOST=...)`) are recognized: the host is tokenized, the user pseudonymized
-and the password redacted.
+| Flag | Default | Description |
+|---|---|---|
+| `--workers` | one per CPU | How many files, and chunks of large files, are processed in parallel. Output is identical for any value. |
+| `--max-extract-mb` | `20480` | The maximum total size, in MB, extracted from archives. Protects against decompression bombs. |
+| `-v`, `--verbose` | off | Write more detail to `_runlog.txt`. |
+| `-q`, `--quiet` | off | Print only errors. Turns off the progress lines. |
+| `--cpuprofile` | none | Write a Go CPU profile to this file. Inspect it with `go tool pprof -top <binary> <file>`. Output is unaffected. |
 
-## Ignoring hostnames/domains
+### What sanitize mode does to each file
 
-```sh
-sas-log-sanitize -i /path/to/log-bundle -o /path/to/output --ignorelist ./ignored-hosts.txt
-```
+| Input | Handling |
+|---|---|
+| Plain text, in UTF-8, UTF-16 (with a BOM), or Windows-1252 | Sanitized line by line. The encoding and line endings (CRLF/LF) are preserved. |
+| `*.gz` (rotated logs) | Decompressed, sanitized, and written back gzipped under the same name. |
+| `.zip`, `.tar`, `.tar.gz`, `.tgz` | Extracted to a private temporary folder. Output goes under a folder named after the archive (`bundle.zip` → `bundle/`). |
+| `*.har`, or `*.json` starting with a top-level `"log"` key | Processed as JSON. Credential headers, cookies, and credential query parameters are redacted. Response bodies are dropped. The output is valid JSON. |
+| Binary files, by extension or content | Skipped and listed in `_summary.txt`. |
+| Archives inside archives, symlinks, and entries with `..` or absolute paths | Skipped and listed. |
 
-`--ignorelist` points to a file of hostnames/domains that should never be
-tokenized or redacted, even if a detector would otherwise match them --
-useful for a noisy but non-sensitive vendor domain that shows up constantly
-in license-check or support-portal URLs. One entry per non-empty,
-non-comment (`#`) line:
-
-```
-# exact hostname
-license.example.com
-
-# wildcard: matches sas.com itself and any subdomain (db1.sas.com, etc.)
-*.sas.com
-```
-
-This is the inverse of `--hostlist`/`hostlist`, which *forces* a customer
-hostname to always be tokenized, including inside compound strings.
-`--ignorelist` is also honored by `--audit-only`, so re-auditing
-already-sanitized output doesn't flag the intentionally-untouched
-hostnames as residual PII.
+Files are processed in alphabetical order by output path, so token numbers are
+the same every time you run the tool on the same input.
 
 ## Reverse mode
 
@@ -106,79 +82,38 @@ hostnames as residual PII.
 sas-log-sanitize --reverse <mapping-file> <text-or-file>
 ```
 
-If the second argument is a path to an existing, readable file, its contents
-are used as the text to reverse; otherwise the argument itself is treated as
-literal text. Every `CATEGORY_NNN` token found is replaced with its original
-value from the mapping file; unknown tokens (typos, tokens from a different
-run) and `SECRET_REDACTED` are left unchanged.
+If `<text-or-file>` is a readable file, the tool reverses its contents.
+Otherwise it treats the argument as literal text. Each token found in the
+mapping file is replaced with its original value, and the result is printed to
+stdout. Unknown tokens and `SECRET_REDACTED` are left unchanged. See
+[Reverse tokens](../guides/share-safely.md#reverse-tokens).
 
 ## Audit-only mode
 
 ```sh
-sas-log-sanitize --audit-only [--mapping <mapping-file>] [--ignorelist ./ignored-hosts.txt] <sanitized-dir>
+sas-log-sanitize --audit-only <sanitized-dir> [--strict] [--mapping <file>] [--ignorelist <file>] [--config <file>]
 ```
 
-Re-scans every file in `<sanitized-dir>` (skipping the tool's own
-`_mapping.json`/`_audit.txt`/`_summary.txt`/`_runlog.txt`) for patterns that
-look like residual PII, without re-running sanitization. Useful for checking
-output that was sanitized by an earlier run, or after manually editing
-sanitized files.
+Re-scans an existing output folder without sanitizing it again. The tool's own
+files (`_audit.txt`, `_summary.*`, `_runlog.txt`) are skipped. Findings are
+printed to stdout, and the exit code follows the sanitize rules.
 
-With the run's mapping file (`--mapping`, or found automatically at
-`<sanitized-dir>.mapping.json`), it also searches for every original value
-the mapping holds; any hit is a High `known-original-value` finding, so the
-run exits 1. Exit codes follow the sanitize rule: 1 for High findings, and
-for any finding under `--strict`.
+- **Mapping file:** if `--mapping` is set, or `<sanitized-dir>.mapping.json`
+  exists, the audit also searches for every original value in it. Any hit is a
+  High `known-original-value` finding.
+- **Ignorelist and config:** pass the same `--ignorelist` and `--config` as the
+  original run. Otherwise hosts and IP ranges you deliberately kept are
+  reported as findings.
 
-## Config file
+## Exit codes
 
-`--config` accepts a YAML file as an alternative to passing flags:
+| Code | Meaning |
+|---|---|
+| `0` | Success, with no High findings. With `--strict`, no findings at all. |
+| `1` | Success, but the audit found High findings. With `--strict`, it found findings of any severity. |
+| `2` | Input error: a missing or unreadable input, hostlist, or ignorelist. |
+| `3` | Processing error: a failure while reading, extracting, or writing. |
+| `4` | Configuration error: an invalid flag or config value, an unknown profile, or a mapping path inside the output directory. |
 
-```yaml
-output: ./sanitized
-hostlist: ./customer-hosts.txt
-ignorelist: ./ignored-hosts.txt
-profiles: [sas94, tomcat, postgres-wipds]
-audit: true
-strict: false
-verbose: true
-
-detectors:
-  fqdn:
-    extra_internal_tlds: [acmecorp, customerdomain]
-  ipv4:
-    skip_ranges: [10.0.0.0/8, 192.168.0.0/16]
-    ip_class: false
-  allowlist:
-    case_insensitive: true
-  url:
-    mode: host
-```
-
-Flags passed explicitly on the command line always win over the config
-file's values. Detector overrides:
-
-- `detectors.ipv4.skip_ranges` — CIDR blocks whose IPv4 addresses are left
-  untokenized (e.g. non-sensitive internal ranges). A malformed CIDR is a
-  config error. The audit pass honors these too, so skipped addresses aren't
-  flagged as residual PII (in `--audit-only`, pass the same `--config`).
-- `detectors.allowlist.case_insensitive` — match `--hostlist` entries
-  regardless of case. The token still records the exact text from the log,
-  so reverse mode restores original casing.
-- `detectors.ipv4.ip_class` — same as `--ip-class`.
-- `detectors.url.mode` — same as `--url-mode` (`host` or `whole`).
-- `detectors.fqdn.extra_internal_tlds` — additional pseudo-TLDs to treat as
-  valid hostnames (e.g. a customer's internal `acmecorp` suffix), unioned
-  with any extras contributed by the active profiles.
-
-## Dry run
-
-`--dry-run` runs both passes and computes accurate stats/findings, but
-writes nothing to the output directory -- useful for previewing what a run
-would do before committing to it.
-
-## Profiling
-
-`--cpuprofile <file>` writes a Go CPU profile of the run, for performance
-work: `go tool pprof -top sas-log-sanitize <file>` lists where the time
-went. It has no effect on output.
+Exit code `1` still writes all the output. Codes `2` to `4` mean the run didn't
+complete.

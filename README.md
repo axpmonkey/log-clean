@@ -1,263 +1,147 @@
 # sas-log-sanitize
 
-A command-line tool that sanitizes SAS 9.4 support log bundles by replacing
-infrastructure identifiers, credentials, and PII with consistent, reversible
-tokens. The sanitized output is meant for feeding into AI assistants for root
-cause analysis; the original-to-token mapping stays on the analyst's local
-machine so findings can be translated back to real values for the duration of
-the support case.
+Strip hostnames, IP addresses, usernames, email addresses, and credentials
+from SAS 9.4 support log bundles so you can share them with an AI assistant,
+a vendor, or a colleague, then translate any finding back to the real values
+on your own machine.
 
-Intended audience: SAS support engineers and admins who need to share log
-bundles with AI assistants (or anyone else) without exposing customer
-hostnames, IPs, usernames, emails, or credentials.
-
-## Quick start
-
-```sh
-sas-log-sanitize -i /path/to/log-bundle -o /path/to/sanitized-output
-# or a single file:
-sas-log-sanitize -i /path/to/single.log -o /path/to/sanitized-output
+```text
+Before                                               After
+---------------------------------------------------  ---------------------------------------------
+Reading /home/jdoe/sas/config.properties             Reading /home/USER_001/sas/config.properties
+Connected to pghost01.corp.example.com on port 9432  Connected to HOST_001 on port 9432
+user jdoe logged in from workstation                 user USER_001 logged in from workstation
+host=pghost01 port=9432 dbname=SharedServices        host=HOST_001 port=9432 dbname=SharedServices
+pw: {AES}Zm9vYmFyYmF6cXV4                            pw: SECRET_REDACTED
 ```
 
-This walks the input (a directory, a single file, or a `.zip`/`.tar`/`.tar.gz`
-bundle), replaces detected identifiers with tokens (`HOST_001`, `USER_001`,
-`IPV4_001`, ...), fully redacts credentials and secrets (`SECRET_REDACTED`),
-and writes the sanitized files plus an audit report (`_audit.txt`), summary
-(`_summary.txt` and `_summary.json`), and runlog (`_runlog.txt`) to the output
-directory. The mapping file goes *next to* the output directory, at
-`<output>.mapping.json`, so the folder you share never contains it.
+- **Consistent.** The same value gets the same token in every file of the bundle,
+  so an assistant can still follow `HOST_001` across logs.
+- **Reversible.** A local mapping file translates `HOST_001` back to
+  `pghost01.corp.example.com`. The mapping file never leaves your machine.
+- **Secrets are destroyed, not tokenized.** Passwords, keys, and session
+  tickets become `SECRET_REDACTED` and aren't recorded anywhere.
+- **Self-checking.** An audit pass re-scans the output for anything that still
+  looks sensitive and fails the run if it finds something.
 
-## Installation
+## Install
 
 Download the binary for your platform from the
-[latest release](https://github.com/axpmonkey/log-clean/releases/latest) --
-no Go toolchain required:
+[latest release](https://github.com/axpmonkey/log-clean/releases/latest).
+You don't need a Go toolchain.
 
 | Platform | File |
 |---|---|
-| Linux (amd64) | `sas-log-sanitize-linux-amd64` |
-| Windows (amd64) | `sas-log-sanitize-windows-amd64.exe` |
-| macOS (arm64) | `sas-log-sanitize-darwin-arm64` |
+| Linux (x86-64) | `sas-log-sanitize-linux-amd64` |
+| Windows (x86-64) | `sas-log-sanitize-windows-amd64.exe` |
+| macOS (Apple silicon) | `sas-log-sanitize-darwin-arm64` |
 
-Each release also has a `SHA256SUMS` file. On Linux:
+Verify the download against the release's `SHA256SUMS` file:
 
 ```sh
 base=https://github.com/axpmonkey/log-clean/releases/latest/download
-curl -LO $base/sas-log-sanitize-linux-amd64
-curl -LO $base/SHA256SUMS
-sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
+curl -LO "$base/sas-log-sanitize-linux-amd64"
+curl -LO "$base/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
 chmod +x sas-log-sanitize-linux-amd64
 ./sas-log-sanitize-linux-amd64 --version
 ```
 
-On Windows, compare `certutil -hashfile sas-log-sanitize-windows-amd64.exe SHA256`
-with the line for that file in `SHA256SUMS`. With the GitHub CLI:
-`gh release download --repo axpmonkey/log-clean --pattern 'sas-log-sanitize-linux-amd64'`.
+- **macOS:** use `shasum -a 256 --ignore-missing -c SHA256SUMS`.
+- **Windows:** run `certutil -hashfile sas-log-sanitize-windows-amd64.exe SHA256`
+  and compare the result with the matching line in `SHA256SUMS`.
 
-Release files are served from `objects.githubusercontent.com`; if a corporate
-proxy blocks that host, build from source instead (below).
+If your network blocks `objects.githubusercontent.com`, build from source.
+See [CONTRIBUTING.md](CONTRIBUTING.md#build).
 
-### Building from source
+## Use it
 
-```sh
-make build      # builds for your current platform into dist/
-make cross      # cross-compiles linux-amd64, windows-amd64, darwin-arm64 into dist/
-```
+The workflow has four steps.
 
-`dist/` is not tracked in git. Builds are stamped with `git describe`
-(e.g. `v0.2.0-3-gabc1234`), shown by `--version`.
+1. **Sanitize** the bundle. The input can be a directory, a single file, or a
+   `.zip`, `.tar`, `.tar.gz`, or `.tgz` archive.
 
-### Releasing
+   ```sh
+   sas-log-sanitize -i case-12345.zip -o case-12345-clean
+   ```
 
-```sh
-make release RELEASE=0.3.0 [NOTES=path/to/notes.md]
-```
+2. **Review** `case-12345-clean/_audit.txt`. The run exits with code `1` if the
+   audit found anything high-severity.
+3. **Share** the `case-12345-clean` folder. The mapping file is written next to
+   it, at `case-12345-clean.mapping.json`, so it can't end up in the folder you
+   share by accident.
+4. **Reverse** whatever the assistant tells you:
 
-Run on an up-to-date, clean `main`: it cross-compiles with version
-`v0.3.0`, writes and verifies `SHA256SUMS`, tags the commit, pushes the tag,
-and publishes the GitHub release with the binaries attached (requires the
-`gh` CLI, logged in). Without `NOTES`, GitHub generates the notes.
+   ```sh
+   sas-log-sanitize --reverse case-12345-clean.mapping.json "HOST_003 refused the connection"
+   ```
 
-Build, test and lint targets run inside a `golang:1.26` Docker container, so
-a local Go install isn't required; `make release` also uses `git` and `gh` on
-the host. See the Makefile for details.
+For a full walkthrough, see [Getting started](docs/getting-started.md).
 
-## Usage
+## Before you share
 
-### Sanitize a bundle
+> [!WARNING]
+> Check these four things every time. The tool can't do them for you.
 
-```sh
-sas-log-sanitize -i /path/to/log-bundle -o /path/to/output \
-  --hostlist customer-hosts.txt \
-  --strict
-```
+- [ ] **Leave the mapping file out.** `*.mapping.json` contains every real value.
+- [ ] **Read `_audit.txt`, and leave it out if it lists findings.** Findings
+      quote the suspect line, which may include real values.
+- [ ] **Check the file names.** The tool sanitizes file contents, not file
+      names. Rename any file whose name contains a hostname or username.
+- [ ] **Delete the mapping file when the case closes.**
 
-| Flag | Default | Purpose |
-|---|---|---|
-| `--input` / `-i` | required | Input directory, a single log file, or a `.zip`/`.tar`/`.tar.gz` bundle |
-| `--output` / `-o` | `<input>-sanitized` | Output directory (created if missing) |
-| `--mapping` / `-m` | `<output>.mapping.json` | Path for the mapping file. Must be outside the output directory (exit 4 otherwise) |
-| `--allow-mapping-in-output` | off | Allow `--mapping` inside the output directory |
-| `--hostlist` | none | Path to a customer-supplied hostname allowlist |
-| `--ignorelist` | none | Path to hostnames/domains to never redact (supports `*.domain` wildcards) |
-| `--profiles` | `auto` | Comma-separated profiles to apply, or `auto` |
-| `--audit` | `true` | Run the audit pass after sanitization |
-| `--strict` | `false` | Also exit 1 on Medium-severity audit findings (High findings always exit 1) |
-| `--config` | none | Path to a YAML config file |
-| `--verbose` / `-v` | `false` | Verbose logging to the runlog |
-| `--quiet` / `-q` | `false` | Suppress non-error output, including progress lines on stderr |
-| `--dry-run` | `false` | Show what would happen, write nothing |
-| `--url-mode` | `host` | `host` replaces only a URL's userinfo and host (keeps scheme, port, path, parameter names); `whole` replaces the entire URL with one `URL_NNN` token |
-| `--keep-har-bodies` | `false` | Keep HAR response bodies (scanned) instead of dropping them |
-| `--ip-class` | `false` | Tokenize IPv4 as `IPV4_PRIV_NNN` / `IPV4_PUB_NNN` so internal vs external stays visible |
-| `--max-extract-mb` | `20480` | Cap on total bytes extracted from `.zip`/`.tar` archives (decompression-bomb guard) |
-| `--workers` | one per CPU | Files (and chunks of large files) processed in parallel; output is identical for any value |
-
-Exit codes: `0` no High audit findings (with `--strict`: no findings at
-all), `1` High-severity audit findings (with `--strict`: any finding), `2`
-input error, `3` processing error, `4` configuration error. Medium findings
-are always listed in `_audit.txt` and counted in `_summary.json`; they only
-fail the run under `--strict`, because the Medium rules are deliberately
-broad (they flag words like `java8`).
-
-### Reverse mode
-
-Translate tokens in a sanitized excerpt (or file) back to their original
-values, using the mapping file from the original run:
-
-```sh
-sas-log-sanitize --reverse /path/to/output.mapping.json "saw HOST_001 fail"
-sas-log-sanitize --reverse /path/to/output.mapping.json /path/to/excerpt.txt
-```
-
-`SECRET_REDACTED` is never reversible -- redacted secrets are never recorded
-anywhere, by design (see "The mapping file" below).
-
-### Audit-only mode
-
-Re-scan an already-sanitized directory for anything that looks like residual
-PII, without re-running sanitization:
-
-```sh
-sas-log-sanitize --audit-only /path/to/output --strict
-```
-
-Pass `--ignorelist` (and `--config`, for `detectors.ipv4.skip_ranges`) here
-too if the original run used them, so values it intentionally left untouched
-aren't re-flagged as residual PII.
-
-With the run's mapping file (`--mapping`, or found automatically at
-`<dir>.mapping.json`), it also searches for every original value the mapping
-holds; any hit is a High `known-original-value` finding and exits 1.
-
-## The mapping file
-
-The mapping file (default `<output>.mapping.json`, next to the output
-directory) is the reverse mapping from tokens back to real values
-(hostnames, IPs, usernames, emails, etc.). **It is the single most sensitive
-artifact this tool produces** -- treat it like a credential:
-
-- It is written *outside* the output directory, so zipping and attaching the
-  sanitized folder can't ship it. A `--mapping` path inside the output
-  directory is refused (exit 4) unless `--allow-mapping-in-output` is passed.
-
-- It is written with owner-only (`0600`) file permissions.
-- It is per-case and ephemeral by design: delete it (or move it to encrypted
-  storage) once the support case is closed. This tool does not implement
-  long-term mapping storage or cross-bundle consistency on purpose.
-- It never contains a password, API key, or other secret -- those are always
-  fully redacted (`SECRET_REDACTED`), never tokenized or recorded.
-- The sanitized log output, the summaries, and the runlog contain no
-  original values. **The audit report (`_audit.txt`) can**: each finding
-  quotes the suspect line, and a `known-original-value` finding names the
-  original value it found. Read it before sharing the output folder, fix or
-  remove what it flags, and leave `_audit.txt` out of what you send if it
-  has findings.
-
-## The allowlist file
-
-`--hostlist` accepts a customer-supplied hostname allowlist: one hostname per
-line, comments allowed with `#`. It exists because some hostnames appear
-embedded inside compound strings the other detectors can't reliably parse
-out on their own (e.g. `/var/log/db-prod-01-archive/`), and because bare,
-non-dotted hostnames (no TLD) aren't caught by the FQDN detector. (A short
-name is still replaced when its full name was found elsewhere in the bundle,
-e.g. `pghost01` once `pghost01.corp.example.com` was seen -- the
-known-values sweep -- but a host that only ever appears short needs the
-allowlist.)
-
-The allowlist detector does **literal substring matching**, not word-boundary
-matching -- it's the only detector that works this way. That means a short
-or non-distinctive entry (e.g. `db1`) will also match inside unrelated text
-(`db10`, `adb1x`). The tool warns at load time about entries shorter than 4
-characters or that are themselves substrings of another entry; prefer fully
-qualified or otherwise distinctive hostnames.
-
-## The ignorelist file
-
-`--ignorelist` is the inverse of `--hostlist`: it names hostnames/domains
-that should **never** be tokenized or redacted, even if a detector would
-otherwise match them. Useful for a noisy but non-sensitive vendor domain
-that shows up constantly (e.g. license-check or support-portal URLs). One
-entry per line, comments allowed with `#`:
-
-```
-license.example.com
-*.sas.com
-```
-
-A bare entry matches that exact hostname (case-insensitively); a
-`*.domain` entry matches the domain itself and any subdomain. `--ignorelist`
-is honored by both sanitize mode and `--audit-only`.
-
-## Limitations
-
-Be aware of these before relying on this tool for a sensitive bundle:
-
-- **No daemon/watch mode.** On-demand processing only.
-- **Archives are unpacked one level deep.** `.zip`/`.tar`/`.tar.gz` bundles
-  (as the input or inside it) are extracted to a private temporary directory
-  that is deleted when the run ends, capped at 20 GiB in total. Archives
-  inside archives, symlinks, and entries with absolute or `..` paths are
-  skipped and listed in `_summary.txt`. Rotated `*.gz` logs are read and
-  written back gzipped (including `*.har.gz`). Change the cap with
-  `--max-extract-mb`.
-- **Input file names are not sanitized.** Output paths mirror input paths;
-  rename files that contain hostnames or usernames before sharing.
-- **Binary files are skipped, not scrubbed.** Detected by extension
-  allowlist and a non-printable-byte-ratio heuristic; binary content
-  dominated by high bytes (0x80-0xFF) rather than control characters may not
-  always be detected as binary -- when in doubt, remove non-text files from
-  the bundle before running.
-- **SAS log line unwrapping is not implemented.** Wrapped/continuation lines
-  may cause a residual miss; the audit pass is the backstop, not a guarantee.
-- **No AIX support.** Linux, Windows, and macOS only.
-- **No CI/CD pipeline.** Local builds only for now.
-- **No cross-bundle consistency, by design.** Each run gets a fresh token
-  registry, so the same hostname in two different runs gets different tokens.
-  This is intentional: the mapping file is per-case and ephemeral (see "The
-  mapping file"), and cross-run/cross-bundle correlation is a deliberate
-  non-goal.
+The reasons are covered in [Share output safely](docs/guides/share-safely.md).
 
 ## Documentation
 
-See [`docs/`](docs/) for more:
+| Guide | Read it to... |
+|---|---|
+| [Getting started](docs/getting-started.md) | Sanitize your first bundle, end to end |
+| [Share output safely](docs/guides/share-safely.md) | Handle the mapping file and audit report, and reverse tokens |
+| [Tune detection](docs/guides/tune-detection.md) | Force or exempt hostnames, set up a config file |
+| [Troubleshooting](docs/guides/troubleshooting.md) | Fix missed values, noisy audits, and non-zero exit codes |
 
-- [`docs/usage.md`](docs/usage.md) -- detailed usage guide
-- [`docs/architecture.md`](docs/architecture.md) -- design rationale (two-pass
-  pipeline, span-claiming, detector ordering)
-- [`docs/detectors.md`](docs/detectors.md) -- per-detector behavior and known
-  limitations
-- [`docs/adding-detectors.md`](docs/adding-detectors.md) -- how to add a new
-  detector
-- [`docs/reversing.md`](docs/reversing.md) -- using the mapping file safely
+| Reference | Contents |
+|---|---|
+| [Command line](docs/reference/cli.md) | Every mode, flag, and exit code |
+| [Configuration file](docs/reference/config.md) | YAML schema and profiles |
+| [Output files](docs/reference/output-files.md) | `_audit.txt`, `_summary.*`, `_runlog.txt`, and the mapping file |
+| [Detectors](docs/reference/detectors.md) | What gets replaced, how, and known limitations |
+
+| For contributors | |
+|---|---|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, and release |
+| [Architecture](docs/architecture.md) | How the pipeline works and why |
+| [Add a detector](docs/adding-detectors.md) | Step-by-step guide |
+
+## Limitations
+
+- **The audit is a backstop, not a guarantee.** Review the output before you
+  share it.
+- **File names aren't sanitized.** Output paths mirror input paths.
+- **Binary files are skipped, not scrubbed.** Remove non-text files you don't need.
+- **Wrapped SAS log lines aren't joined.** A value split across two lines can
+  be missed.
+- **Archives are unpacked one level deep.** An archive inside an archive is
+  skipped and listed in `_summary.txt`.
+- **Each run is independent.** The same hostname gets different tokens in
+  different runs. This is deliberate: mapping files are per-case and short-lived.
+- **Runs on demand only.** There's no watch or daemon mode.
+- **Supported platforms are Linux, Windows, and macOS.** AIX isn't supported.
+
+Detector-level limitations are listed in
+[Detectors](docs/reference/detectors.md#known-limitations).
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **Bundle** | The set of logs you sanitize: a directory, a file, or an archive. |
+| **Token** | A stand-in such as `HOST_001` or `USER_002`. It's reversible with the mapping file. |
+| **Redact** | Replace a secret with `SECRET_REDACTED`. It can't be reversed. |
+| **Mapping file** | The local JSON file that maps tokens to original values. |
+| **Finding** | Something in the output that the audit thinks still looks sensitive. |
 
 ## License
 
-Apache License 2.0 -- see [LICENSE](LICENSE).
-
-## Contributing
-
-See [`docs/adding-detectors.md`](docs/adding-detectors.md) for the most
-common kind of contribution (a new detector). Run `make test` and `make lint`
-before submitting changes.
+Apache License 2.0. See [LICENSE](LICENSE).

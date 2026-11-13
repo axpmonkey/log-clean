@@ -1,47 +1,90 @@
-# Reversing sanitized output
+# Share output safely
 
-When an AI assistant (or anyone else) points out something interesting in
-sanitized output -- "the connection from `HOST_003` keeps timing out" -- use
-reverse mode to translate that back to the real value, on your own machine,
-using the mapping file from the original run:
+Sanitizing produces one folder that's safe to share and two artifacts that
+aren't. This guide explains which is which, how to check the output before it
+leaves your machine, and how to translate findings back to real values.
+
+## What's safe and what isn't
+
+| Artifact | Contains original values? | Share it? |
+|---|---|---|
+| Sanitized log files | No | Yes |
+| `_summary.txt`, `_summary.json` | No (counts and relative paths only) | Yes |
+| `_runlog.txt` | No | Yes |
+| `_audit.txt` | **Yes, when it lists findings.** Each finding quotes the suspect line. | Only if it says `High=0, Medium=0` |
+| `<output>.mapping.json` | **Yes, every one.** | **Never** |
+| File and folder names | **Possibly.** Names aren't sanitized. | Check and rename first |
+
+## Checklist
+
+Run through this list before you send anything.
+
+1. **The audit has no High findings.** The run exited with code `0`, or you've
+   fixed every High line in `_audit.txt`.
+2. **You've skimmed the Medium findings.** Most are noise. A real hostname in
+   the list means you need a [hostlist](tune-detection.md#always-tokenize-a-hostname).
+3. **`_audit.txt` is excluded** if it lists any findings.
+4. **No file or folder name contains a hostname, username, or customer name.**
+5. **The mapping file isn't in the folder.** By default it's written *next to*
+   the output folder, and the tool refuses to put it inside one unless you pass
+   `--allow-mapping-in-output`.
+6. **The skipped files are expected.** `_summary.txt` lists them first. The
+   assistant won't see those files.
+
+If you edit sanitized files by hand, re-check them with the run's mapping file:
 
 ```sh
-sas-log-sanitize --reverse /path/to/output.mapping.json "the connection from HOST_003 keeps timing out"
+sas-log-sanitize --audit-only case-12345-clean --strict
 ```
 
-Or point it at a file containing a larger excerpt:
+The mapping file is found automatically at `case-12345-clean.mapping.json`.
+Pass `--mapping <file>` if it's somewhere else. With the mapping file, the
+audit also searches for every original value it holds. Any hit is a High
+`known-original-value` finding.
+
+## Look after the mapping file
+
+The mapping file is a complete dictionary from every token back to the real
+hostname, IP address, username, or email address it represents. Treat it like
+a credential.
+
+- **Keep it local.** Don't put it in a shared drive, ticket, or chat.
+- **Leave its permissions alone.** It's written as owner-only (`0600`).
+- **Never give it to the assistant** that's reading the sanitized logs. That
+  undoes the sanitizing.
+- **Delete it when the case closes,** or move it to encrypted storage.
+  Nothing depends on keeping it: every run starts a fresh mapping, so a later
+  run never needs an earlier one.
+
+The mapping file never contains passwords, keys, or other secrets. Those are
+redacted to `SECRET_REDACTED` and aren't recorded anywhere, not even in
+`_runlog.txt`.
+
+For the file format, see [Output files](../reference/output-files.md#mapping-file).
+
+## Reverse tokens
+
+When the assistant says something like "the connection from `HOST_003` keeps
+timing out," translate it on your machine:
 
 ```sh
-sas-log-sanitize --reverse /path/to/output.mapping.json /path/to/excerpt.txt
+sas-log-sanitize --reverse case-12345-clean.mapping.json "the connection from HOST_003 keeps timing out"
 ```
 
-## What does and doesn't reverse
+To translate a longer excerpt, save it to a file and pass the path instead:
 
-- Every `CATEGORY_NNN` token (e.g. `HOST_003`, `USER_001`, `IPV4_002`) is
-  replaced with its original value, if it's in the mapping file.
-- A token-shaped string with no entry in the mapping (a typo, a token from a
-  *different* run's mapping file, or just text that happens to look like a
-  token) is left unchanged rather than guessed at.
-- `SECRET_REDACTED` is **never reversible**. Passwords, API keys, and other
-  secrets are fully redacted at sanitization time and never recorded
-  anywhere -- not in the mapping file, not in the runlog. There is nothing
-  to reverse them to, by design.
+```sh
+sas-log-sanitize --reverse case-12345-clean.mapping.json excerpt.txt
+```
 
-## Handling the mapping file safely
+If the second argument is a readable file, the tool reverses the file's
+contents. Otherwise it treats the argument as text. The result goes to stdout.
 
-The mapping file is the single most sensitive artifact this tool produces --
-it's a complete dictionary from every token back to the real hostname, IP,
-username, or email it represents. Treat it like a credential:
+| Input | Result |
+|---|---|
+| A token in the mapping file (`HOST_003`, `IPV4_PRIV_002`) | The original value |
+| A token-shaped string that isn't in the mapping file (a typo, or a token from another run) | Left unchanged. The tool doesn't guess. |
+| `SECRET_REDACTED` | Left unchanged. There's nothing to reverse it to. |
 
-- Keep it on your own machine, not in a shared location, for the duration of
-  the support case.
-- It's written with owner-only (`0600`) permissions; don't loosen that.
-- Delete it (or move it to encrypted storage) once the case is closed --
-  this tool deliberately does not implement long-term mapping storage, and
-  there is no cross-bundle consistency to lose by deleting it (each run gets
-  a fresh mapping).
-- Never paste the mapping file's contents into the same AI assistant
-  conversation you're using the sanitized logs with -- that would defeat the
-  entire point of sanitizing them in the first place. Reverse translation is
-  for your own local reading, not for re-injecting real values back into a
-  shared context.
+Reverse mode is for your own reading. Don't paste the reversed text back into
+the conversation with the assistant.
