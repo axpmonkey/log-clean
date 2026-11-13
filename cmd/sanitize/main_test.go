@@ -129,6 +129,45 @@ func TestExitCodesHighOnly(t *testing.T) {
 	}
 }
 
+// Flags after a positional argument are parsed, not silently taken as more
+// positional arguments: `--audit-only out --strict` must honor --strict.
+func TestFlagsAfterPositionalArgs(t *testing.T) {
+	in := t.TempDir()
+	os.WriteFile(filepath.Join(in, "app.log"), []byte("connecting to sasapp01 now\n"), 0o644) // Medium only
+	out := filepath.Join(t.TempDir(), "out")
+
+	// Sanitize with the input as a positional argument and flags after it.
+	if code, stdout, stderr := runCLI(t, in, "-o", out, "--strict", "-q"); code != exitFindingsWarning || stdout != "" {
+		t.Fatalf("sanitize <in> -o out --strict -q: exit %d, want %d; stdout %q; stderr %q", code, exitFindingsWarning, stdout, stderr)
+	}
+	if code, _, _ := runCLI(t, "--audit-only", out, "--strict"); code != exitFindingsWarning {
+		t.Errorf("--audit-only <dir> --strict: exit %d, want %d", code, exitFindingsWarning)
+	}
+	// "--" still ends flag parsing: "--strict" after it is not a flag, so
+	// it is a second positional argument and the Medium finding passes.
+	if code, _, _ := runCLI(t, "--audit-only", "--", out, "--strict"); code != exitOK {
+		t.Errorf("--audit-only -- <dir> --strict: exit %d, want %d", code, exitOK)
+	}
+	if code, _, stderr := runCLI(t, "--audit-only", out, "--no-such-flag"); code != exitConfigError {
+		t.Errorf("unknown trailing flag: exit %d, want %d; stderr %q", code, exitConfigError, stderr)
+	}
+}
+
+// Reverse mode keeps everything after the first positional argument
+// literal, so the text to reverse may start with "-".
+func TestReverseTextStartingWithDash(t *testing.T) {
+	in := filepath.Join(goldenRoot, "known_values_sweep", "input")
+	out := filepath.Join(t.TempDir(), "out")
+	mapping := filepath.Join(t.TempDir(), "case.mapping.json")
+	if code, _, stderr := runCLI(t, "-q", "-i", in, "-o", out, "-m", mapping); code != exitOK && code != exitFindingsWarning {
+		t.Fatalf("sanitize exit %d: %s", code, stderr)
+	}
+	code, stdout, stderr := runCLI(t, "--reverse", mapping, "-HOST_001 is down")
+	if code != exitOK || strings.TrimSpace(stdout) != "-pghost01.corp.example.com is down" {
+		t.Errorf("reverse: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+}
+
 // --max-extract-mb caps archive extraction (decompression-bomb guard).
 func TestMaxExtractFlag(t *testing.T) {
 	var b bytes.Buffer

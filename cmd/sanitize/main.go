@@ -82,7 +82,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&f.showHelp, "help", false, "show usage")
 	fs.StringVar(&f.cpuProfile, "cpuprofile", "", "write a Go CPU profile to this file (for performance work)")
 
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseInterspersed(fs, args, func() bool { return f.reverseMode })
+	if err != nil {
 		return exitConfigError
 	}
 
@@ -117,11 +118,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	switch {
 	case f.reverseMode:
-		return runReverse(&f, fs.Args(), stdout, stderr)
+		return runReverse(&f, positional, stdout, stderr)
 	case f.auditOnly:
-		return runAuditOnly(&f, fs.Args(), stdout, stderr)
+		return runAuditOnly(&f, positional, stdout, stderr)
 	default:
-		return runSanitize(&f, fs.Args(), stdout, stderr)
+		return runSanitize(&f, positional, stdout, stderr)
+	}
+}
+
+// parseInterspersed parses flags wherever they appear among the arguments
+// and returns the positional arguments in order. The standard flag package
+// stops at the first positional argument, which silently turned a trailing
+// flag (`--audit-only out --strict`) into another positional argument.
+//
+// "--" still ends flag parsing: everything after it is positional. In
+// reverse mode (literalAfterPositional reports true), everything from the
+// first positional argument on is positional too, so the text to reverse
+// may itself start with "-".
+func parseInterspersed(fs *flag.FlagSet, args []string, literalAfterPositional func() bool) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return positional, nil
+		}
+		// fs.Parse consumes a "--" terminator; if it did, rest is literal.
+		consumed := len(args) - len(rest)
+		if (consumed > 0 && args[consumed-1] == "--") || literalAfterPositional() {
+			return append(positional, rest...), nil
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
 	}
 }
 
